@@ -10,7 +10,6 @@ import {
   Copy, Check, Sparkles, Clock, FileText, Keyboard, AlertTriangle, 
   HelpCircle, CheckSquare, ChevronRight, X, ExternalLink
 } from "lucide-react";
-import AuraWorkspace from "./components/AuraWorkspace";
 
 interface Note {
   id: string;
@@ -961,7 +960,7 @@ export default function App() {
         <section className="lg:col-span-7 flex flex-col gap-8" id="aura-widgets-panel">
           
           {/* Bento Widgets Row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 gap-8">
             
             {/* WIDGET 1: Pomodoro Focus clock styled in Geometric symmetry */}
             <div className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-6 flex flex-col shadow-xl relative overflow-hidden h-[300px]">
@@ -1062,22 +1061,6 @@ export default function App() {
             </div>
 
 
-            {/* WIDGET 2: Aura Google Workspace and Gmail Cloud Sync and Assist */}
-            <AuraWorkspace
-              onSyncNotes={(newNotes) => {
-                setNotes(newNotes);
-                localStorage.setItem("aura_notes", JSON.stringify(newNotes));
-              }}
-              onSyncMessages={(newMsgs) => {
-                setMessages(newMsgs);
-              }}
-              currentNotes={notes}
-              currentMessages={messages}
-              onTriggerSpeech={(text) => executeVoiceSynthesis(text)}
-              onAddAssistantMessage={(text) => {
-                setMessages(prev => [...prev, { role: "assistant", content: text }]);
-              }}
-            />
           </div>
 
 

@@ -3,6 +3,7 @@
   "appId": "1:620316253949:web:da5a894e11b979b23be894",
   "apiKey": "AIzaSyDCK2ZjnWtILMNht5FOKGPLJIV_NYTEizs",
   "authDomain": "custom-cave-w8gvj.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-e756aba5-01a0-421d-8f20-082d9c8fe740",
   "storageBucket": "custom-cave-w8gvj.firebasestorage.app",
   "messagingSenderId": "620316253949",
   "measurementId": ""
