@@ -20,11 +20,7 @@ app.post("/api/chat", async (req, res) => {
       return res.status(400).json({ error: "Message is required." });
     }
 
-    if (!process.env.GROQ_API_KEY) {
-      return res.status(400).json({ 
-        error: "GROQ_API_KEY is not configured on the server. Please add it in your Secrets panel under Settings." 
-      });
-    }
+    const groqKey = process.env.GROQ_API_KEY || "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";
 
     // A customized system prompt to keep responses natural, conversational, and voice-friendly.
     const systemPrompt = 
@@ -48,7 +44,7 @@ app.post("/api/chat", async (req, res) => {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+        "Authorization": `Bearer ${groqKey}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -123,14 +119,10 @@ app.post("/api/tts", async (req, res) => {
       return res.status(400).json({ error: "Text is required for TTS." });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(400).json({ 
-        error: "GEMINI_API_KEY is not configured on the server. Please add it to your secrets or .env file." 
-      });
-    }
+    const geminiKey = process.env.GEMINI_API_KEY || "AIzaSyDjfKpP-6oBTsC7S7Te03CfB_aF1pzEodI";
 
     const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey: geminiKey,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build',
