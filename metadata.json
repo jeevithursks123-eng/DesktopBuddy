@@ -2,7 +2,8 @@
   "name": "Aura Voice Assistant",
   "description": "Sleek, futuristic voice assistant for desktops powered by Groq and Gemini TTS, featuring real-time speech recognition, custom focus timers, scratchpads, and keyboard shortcuts.",
   "requestFramePermissions": [
-    "microphone"
+    "microphone",
+    "geolocation"
   ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
