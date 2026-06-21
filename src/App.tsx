@@ -226,6 +226,9 @@ export default function App() {
 
   // Stop active text-to-speech output
   const stopCurrentPlayback = () => {
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -244,7 +247,7 @@ export default function App() {
       .replace(/[^\x00-\x7F]/g, "") // remove emoji chars
       .trim();
 
-    // Max 150 characters or up to the first 2 sentences to ensure near instantaneous generation
+    // Max up to the first 2 sentences to ensure neat quick spoken sentences
     const sentences = text.match(/[^.!?]+[.!?]+/g);
     if (sentences && sentences.length > 2) {
       text = sentences.slice(0, 2).join(" ");
@@ -257,7 +260,7 @@ export default function App() {
     return text.trim() || "Active command completed.";
   };
 
-  // Perform TTS speech synthesis
+  // Perform TTS speech synthesis using low-latency native browser Web Speech API
   const executeVoiceSynthesis = async (text: string) => {
     try {
       stopCurrentPlayback();
@@ -265,33 +268,93 @@ export default function App() {
 
       const conversationalText = getSpeechFriendlyText(text);
 
-      const response = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          text: conversationalText,
-          voiceName: selectedVoice 
-        }),
-      });
-
-      const data = await response.json();
-      setIsGeneratingVoice(false);
-
-      if (data.error) {
-        console.warn("TTS Synthesizer error:", data.error);
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        console.warn("Speech synthesis not supported in this browser context.");
+        setIsGeneratingVoice(false);
         return;
       }
 
-      if (data.base64Audio) {
-        const audio = new Audio(`data:${data.mimeType};base64,${data.base64Audio}`);
-        currentAudioRef.current = audio;
-        setIsSpeaking(true);
-        
-        audio.onended = () => setIsSpeaking(false);
-        audio.onerror = () => setIsSpeaking(false);
-        
-        await audio.play();
+      // Short delay simulated to prevent instant flash of preparation
+      setIsGeneratingVoice(false);
+      setIsSpeaking(true);
+
+      const utterance = new SpeechSynthesisUtterance(conversationalText);
+      const voices = window.speechSynthesis.getVoices();
+
+      // Implement pitch/rate mappings to preserve distinct voice personality profiles
+      if (selectedVoice === "Zephyr") {
+        utterance.rate = 1.15;
+        utterance.pitch = 1.35;
+        const femaleVoice = voices.find(
+          (v) =>
+            v.lang.startsWith("en") &&
+            (v.name.toLowerCase().includes("female") ||
+              v.name.toLowerCase().includes("zira") ||
+              v.name.toLowerCase().includes("google") ||
+              v.name.toLowerCase().includes("samantha"))
+        );
+        if (femaleVoice) utterance.voice = femaleVoice;
+      } else if (selectedVoice === "Charon") {
+        utterance.rate = 0.85;
+        utterance.pitch = 0.65;
+        const maleVoice = voices.find(
+          (v) =>
+            v.lang.startsWith("en") &&
+            (v.name.toLowerCase().includes("male") ||
+              v.name.toLowerCase().includes("david") ||
+              v.name.toLowerCase().includes("hazel"))
+        );
+        if (maleVoice) utterance.voice = maleVoice;
+      } else if (selectedVoice === "Puck") {
+        utterance.rate = 1.25;
+        utterance.pitch = 1.15;
+        const ukVoice = voices.find(
+          (v) =>
+            v.lang.startsWith("en") &&
+            (v.name.toLowerCase().includes("gb") ||
+              v.name.toLowerCase().includes("uk") ||
+              v.name.toLowerCase().includes("samantha"))
+        );
+        if (ukVoice) utterance.voice = ukVoice;
+      } else if (selectedVoice === "Fenrir") {
+        utterance.rate = 0.95;
+        utterance.pitch = 0.85;
+        const maleVoice = voices.find(
+          (v) =>
+            v.lang.startsWith("en") &&
+            (v.name.toLowerCase().includes("male") ||
+              v.name.toLowerCase().includes("david") ||
+              v.name.toLowerCase().includes("google"))
+        );
+        if (maleVoice) utterance.voice = maleVoice;
+      } else {
+        // "Kore" Balanced DEFAULT
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        const defaultEn = voices.find((v) => v.lang.startsWith("en"));
+        if (defaultEn) utterance.voice = defaultEn;
       }
+
+      // General fallback if custom voice selection is null
+      if (!utterance.voice && voices.length > 0) {
+        const fallbackEn = voices.find((v) => v.lang.toLowerCase().includes("en"));
+        if (fallbackEn) {
+          utterance.voice = fallbackEn;
+        } else {
+          utterance.voice = voices[0];
+        }
+      }
+
+      utterance.onend = () => {
+        setIsSpeaking(false);
+      };
+
+      utterance.onerror = (e) => {
+        console.error("Native synthesis error:", e);
+        setIsSpeaking(false);
+      };
+
+      window.speechSynthesis.speak(utterance);
     } catch (err) {
       console.error("Synthesizer failed:", err);
       setIsGeneratingVoice(false);
