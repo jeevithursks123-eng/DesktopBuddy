@@ -1,0 +1,1137 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { 
+  Mic, MicOff, Play, Pause, RotateCcw, Volume2, VolumeX, Plus, Trash2, 
+  Copy, Check, Sparkles, Clock, FileText, Keyboard, AlertTriangle, 
+  HelpCircle, CheckSquare, ChevronRight, X, ExternalLink
+} from "lucide-react";
+import AuraWorkspace from "./components/AuraWorkspace";
+
+interface Note {
+  id: string;
+  content: string;
+  timestamp: string;
+}
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  isCommand?: boolean;
+}
+
+export default function App() {
+  // Navigation or Tabs - None as per Single-View Constraint!
+  // App states
+  const [messages, setMessages] = useState<Message[]>([
+    { role: "assistant", content: "Hello! I am Aura, your desktop voice assistant. Pick a voice or press the Spacebar to speak relative commands like 'start focus timer for 25 minutes' or 'create note: check my calendar today'." }
+  ]);
+  const [inputText, setInputText] = useState("");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState("Kore");
+  const [apiError, setApiError] = useState<string | null>(null);
+  
+  // Real-time clocks
+  const [localTime, setLocalTime] = useState("");
+  const [utcTime, setUtcTime] = useState("");
+
+  // Speech Recognition ref / state
+  const [recognitionSupported, setRecognitionSupported] = useState(true);
+  const recognitionRef = useRef<any>(null);
+  const currentTranscriptRef = useRef("");
+  
+  // Audio playback ref
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Desktop Scratchpad state
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [manualNoteText, setManualNoteText] = useState("");
+  const [copiedNoteId, setCopiedNoteId] = useState<string | null>(null);
+  const [copiedResponse, setCopiedResponse] = useState(false);
+
+  // Desktop Pomodoro Focus Timer
+  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const [timerLeft, setTimerLeft] = useState(25 * 60); // 25 mins in sec
+  const [timerDuration, setTimerDuration] = useState(25 * 60);
+
+  // Setup clocks
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setLocalTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      setUtcTime(now.toUTCString().substring(17, 25) + " UTC");
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Setup Speech Recognition
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setRecognitionSupported(false);
+      return;
+    }
+
+    const rec = new SpeechRecognition();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+
+    rec.onstart = () => {
+      setIsListening(true);
+      currentTranscriptRef.current = "";
+    };
+
+    rec.onresult = (event: any) => {
+      let finalTranscript = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          // You could show interim results if wanted
+          currentTranscriptRef.current = event.results[i][0].transcript;
+        }
+      }
+      if (finalTranscript) {
+        currentTranscriptRef.current = finalTranscript;
+      }
+    };
+
+    rec.onend = () => {
+      setIsListening(false);
+      const textToSubmit = currentTranscriptRef.current.trim();
+      if (textToSubmit) {
+        handleSendMessage(textToSubmit);
+      }
+    };
+
+    rec.onerror = (event: any) => {
+      console.error("Speech Recognition encounter:", event.error);
+      setIsListening(false);
+    };
+
+    recognitionRef.current = rec;
+  }, []);
+
+  // Load Scratchpad values from localStorage
+  useEffect(() => {
+    const savedNotes = localStorage.getItem("aura_notes");
+    if (savedNotes) {
+      try {
+        setNotes(JSON.parse(savedNotes));
+      } catch (err) {
+        console.error("Failed to parse saved notes database", err);
+      }
+    } else {
+      // Seed default notes
+      const initial: Note[] = [
+        { id: "1", content: "Spacebar serves as shortcut to activate/deactivate mic", timestamp: new Date().toLocaleTimeString() },
+        { id: "2", content: "Try saying: 'create note buy hardware tools'", timestamp: new Date().toLocaleTimeString() }
+      ];
+      setNotes(initial);
+      localStorage.setItem("aura_notes", JSON.stringify(initial));
+    }
+  }, []);
+
+  // Pomodoro Focus Timer tick hook
+  useEffect(() => {
+    let interval: any = null;
+    if (isTimerRunning && timerLeft > 0) {
+      interval = setInterval(() => {
+        setTimerLeft(prev => prev - 1);
+      }, 1000);
+    } else if (timerLeft === 0 && isTimerRunning) {
+      setIsTimerRunning(false);
+      handleVoiceSpeechNotification("Your designated focus session has completed, congratulations!");
+    }
+    return () => clearInterval(interval);
+  }, [isTimerRunning, timerLeft]);
+
+  // Global Keyboard listener for Spacebar mic toggle
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in form inputs
+      if (
+        document.activeElement?.tagName === "INPUT" || 
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+
+      if (e.code === "Space") {
+        e.preventDefault();
+        toggleMicrophone();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isListening, recognitionSupported]);
+
+  // Handle manual note storage state update
+  const saveNotesToStorage = (updatedNotes: Note[]) => {
+    setNotes(updatedNotes);
+    localStorage.setItem("aura_notes", JSON.stringify(updatedNotes));
+  };
+
+  const addScratchnote = (content: string) => {
+    const newNote: Note = {
+      id: Date.now().toString(),
+      content: content.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    saveNotesToStorage([newNote, ...notes]);
+  };
+
+  const deleteScratchnote = (id: string) => {
+    const filtered = notes.filter(n => n.id !== id);
+    saveNotesToStorage(filtered);
+  };
+
+  const clearAllNotes = () => {
+    saveNotesToStorage([]);
+  };
+
+  // Toggle Speech Recognition mic
+  const toggleMicrophone = () => {
+    if (!recognitionRef.current) {
+      if (!recognitionSupported) {
+        alert("Speech recognition isn't supported in this browser environment. Please type your prompt.");
+      }
+      return;
+    }
+
+    stopCurrentPlayback();
+
+    if (isListening) {
+      recognitionRef.current.stop();
+    } else {
+      setApiError(null);
+      try {
+        recognitionRef.current.start();
+      } catch (err: any) {
+        console.error("Mic start failed", err);
+      }
+    }
+  };
+
+  // Stop active text-to-speech output
+  const stopCurrentPlayback = () => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    setIsSpeaking(false);
+  };
+
+  // Helper to strip markdown and shorten text to 1-2 clean sentences for fast sub-second voice synthesis
+  const getSpeechFriendlyText = (fullText: string): string => {
+    // Strip code blocks, inline code, bold, links, and non-ascii emojis
+    let text = fullText
+      .replace(/```[\s\S]*?```/g, "Code block omitted.")
+      .replace(/`[\s\S]*?`/g, "")
+      .replace(/\*\*|_\*|~~|`/g, "")
+      .replace(/\[.*?\]\(.*?\)/g, "")
+      .replace(/[^\x00-\x7F]/g, "") // remove emoji chars
+      .trim();
+
+    // Max 150 characters or up to the first 2 sentences to ensure near instantaneous generation
+    const sentences = text.match(/[^.!?]+[.!?]+/g);
+    if (sentences && sentences.length > 2) {
+      text = sentences.slice(0, 2).join(" ");
+    }
+
+    if (text.length > 180) {
+      text = text.substring(0, 180) + "...";
+    }
+
+    return text.trim() || "Active command completed.";
+  };
+
+  // Perform TTS speech synthesis
+  const executeVoiceSynthesis = async (text: string) => {
+    try {
+      stopCurrentPlayback();
+      setIsGeneratingVoice(true);
+
+      const conversationalText = getSpeechFriendlyText(text);
+
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          text: conversationalText,
+          voiceName: selectedVoice 
+        }),
+      });
+
+      const data = await response.json();
+      setIsGeneratingVoice(false);
+
+      if (data.error) {
+        console.warn("TTS Synthesizer error:", data.error);
+        return;
+      }
+
+      if (data.base64Audio) {
+        const audio = new Audio(`data:${data.mimeType};base64,${data.base64Audio}`);
+        currentAudioRef.current = audio;
+        setIsSpeaking(true);
+        
+        audio.onended = () => setIsSpeaking(false);
+        audio.onerror = () => setIsSpeaking(false);
+        
+        await audio.play();
+      }
+    } catch (err) {
+      console.error("Synthesizer failed:", err);
+      setIsGeneratingVoice(false);
+      setIsSpeaking(false);
+    }
+  };
+
+  // Simplified TTS announcer for widgets (runs directly)
+  const handleVoiceSpeechNotification = async (text: string) => {
+    await executeVoiceSynthesis(text);
+  };
+
+  // Run desktop commands parser
+  const parseDesktopCommands = (text: string): { matched: boolean; feedback: string; reply: string } | null => {
+    const normalized = text.toLowerCase().trim();
+
+    // 1. TIMERS: Match focus, countdown, pomodoro
+    if (
+      normalized.includes("timer") || 
+      normalized.includes("pomodoro") || 
+      normalized.includes("countdown") || 
+      normalized.includes("focus")
+    ) {
+      if (
+        normalized.includes("start") || 
+        normalized.includes("begin") || 
+        normalized.includes("run") || 
+        normalized.includes("launch")
+      ) {
+        // Detect numbers in expression
+        const numbers = normalized.match(/\d+/);
+        const minutes = numbers ? parseInt(numbers[0], 10) : 25;
+        
+        setTimerDuration(minutes * 60);
+        setTimerLeft(minutes * 60);
+        setIsTimerRunning(true);
+
+        const announcement = `Launching a ${minutes} minute focus session now.`;
+        return {
+          matched: true,
+          feedback: `Command Executed: Created a ${minutes} minute focus timer.`,
+          reply: announcement
+        };
+      } else if (
+        normalized.includes("stop") || 
+        normalized.includes("pause") || 
+        normalized.includes("freeze")
+      ) {
+        setIsTimerRunning(false);
+        return {
+          matched: true,
+          feedback: "Command Executed: Paused the focus timer.",
+          reply: "I have paused your focus timer session."
+        };
+      } else if (
+        normalized.includes("reset") || 
+        normalized.includes("clear")
+      ) {
+        setIsTimerRunning(false);
+        setTimerLeft(25 * 60);
+        setTimerDuration(25 * 60);
+        return {
+          matched: true,
+          feedback: "Command Executed: Reset focus timer.",
+          reply: "Focus timer has been successfully reset to twenty-five minutes."
+        };
+      }
+    }
+
+    // 2. SCRATCHPAD NOTES: Match note creations
+    if (
+      normalized.startsWith("create note") || 
+      normalized.startsWith("take note") || 
+      normalized.startsWith("add note") || 
+      normalized.startsWith("write down")
+    ) {
+      let noteContent = "";
+      const prefixes = ["create note", "take note", "add note", "write down"];
+      for (const prefix of prefixes) {
+        if (normalized.startsWith(prefix)) {
+          noteContent = text.substring(prefix.length).trim().replace(/^[:\s,-]+/, "");
+          break;
+        }
+      }
+
+      if (noteContent) {
+        addScratchnote(noteContent);
+        return {
+          matched: true,
+          feedback: `Command Executed: Added Note "${noteContent.substring(0, 30)}..."`,
+          reply: `I have added "${noteContent.substring(0, 30)}" to your desktop scratchpad.`
+        };
+      }
+    }
+
+    if (
+      normalized === "clear notes" || 
+      normalized === "delete all notes" || 
+      normalized === "empty notes"
+    ) {
+      clearAllNotes();
+      return {
+        matched: true,
+        feedback: "Command Executed: Cleared scratchpad.",
+        reply: "I have emptied all notes from your desktop scratchpad."
+      };
+    }
+
+    // 3. CLIPBOARD HELPER: Match copy response
+    if (
+      normalized === "copy response" || 
+      normalized === "copy that" || 
+      normalized === "copy answer"
+    ) {
+      const lastAssistantResponse = [...messages]
+        .reverse()
+        .find(m => m.role === "assistant" && !m.isCommand);
+
+      if (lastAssistantResponse) {
+        navigator.clipboard.writeText(lastAssistantResponse.content);
+        return {
+          matched: true,
+          feedback: "Command Executed: Copied last response.",
+          reply: "I've successfully copied my last response to your clipboard."
+        };
+      }
+    }
+
+    return null;
+  };
+
+  // Master send message flow
+  const handleSendMessage = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    setApiError(null);
+    stopCurrentPlayback();
+
+    // 1. Push user message immediately
+    setMessages(prev => [...prev, { role: "user", content: trimmed }]);
+    setInputText("");
+
+    // 2. Parse active desktop commands
+    const commandResult = parseDesktopCommands(trimmed);
+    if (commandResult) {
+      setMessages(prev => [...prev, { 
+        role: "assistant", 
+        content: commandResult.feedback,
+        isCommand: true 
+      }]);
+      await executeVoiceSynthesis(commandResult.reply);
+      return;
+    }
+
+    // 3. Normal AI query routing
+    setIsThinking(true);
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: trimmed,
+          history: messages.map(m => ({ role: m.role, content: m.content }))
+        })
+      });
+
+      const data = await response.json();
+      setIsThinking(false);
+
+      if (data.error) {
+        setApiError(data.error);
+        return;
+      }
+
+      if (data.reply) {
+        setMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
+        await executeVoiceSynthesis(data.reply);
+      }
+    } catch (err: any) {
+      console.error("Chat request failed:", err);
+      setApiError(err.message || "An unexpected error occurred while communicating with Groq.");
+      setIsThinking(false);
+    }
+  };
+
+  // Test the selected prebuilt voice
+  const triggerVoiceTest = async () => {
+    if (isSpeaking) {
+      stopCurrentPlayback();
+      return;
+    }
+    const sampleText = `Hello. This is the ${selectedVoice} model speaker voice config.`;
+    await executeVoiceSynthesis(sampleText);
+  };
+
+  // Copy AI response manually
+  const copyResponseText = (content: string) => {
+    navigator.clipboard.writeText(content);
+    setCopiedResponse(true);
+    setTimeout(() => setCopiedResponse(false), 2000);
+  };
+
+  // Copy unique Note item
+  const copyNoteText = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedNoteId(id);
+    setTimeout(() => setCopiedNoteId(null), 2000);
+  };
+
+  // Direct widget buttons for presets
+  const applyTimerPreset = (minutes: number) => {
+    setIsTimerRunning(false);
+    setTimerDuration(minutes * 60);
+    setTimerLeft(minutes * 60);
+  };
+
+  // Render countdown string
+  const formatTimerLabel = () => {
+    const mins = Math.floor(timerLeft / 60);
+    const secs = timerLeft % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Calculate Pomodoro ring progress percent
+  const getTimerProgressPercent = () => {
+    return ((timerDuration - timerLeft) / timerDuration) * 100;
+  };
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200 relative overflow-x-hidden">
+      
+      {/* Symmetrical subtle linear gradient background overlay */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-950/20 via-zinc-950 to-zinc-950 pointer-events-none" />
+
+      {/* Primary Top Header Bar: Symmetrical Layout */}
+      <header className="border-b border-zinc-850 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-40 px-8 py-5 flex flex-col md:flex-row justify-between items-center gap-6 transition-all" id="aura-desktop-header">
+        
+        {/* Dynamic Nav Logo block with rotated geometry */}
+        <div className="flex items-center gap-4">
+          <div className="w-8 h-8 bg-indigo-600 rounded-sm rotate-45 flex items-center justify-center shadow-lg shadow-indigo-500/10">
+            <div className="w-2.5 h-2.5 bg-white rounded-full -rotate-45" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold tracking-tight uppercase text-zinc-100 flex items-center gap-2">
+              Aura <span className="text-zinc-500 font-normal tracking-wide normal-case underline decoration-indigo-500 underline-offset-4 pl-1">Desktop</span>
+            </h1>
+          </div>
+        </div>
+
+        {/* Header Symmetrical Statistics and State */}
+        <div className="flex flex-wrap items-center gap-8 text-neutral-100">
+          
+          {/* Symmetrical Spec: System Clocks */}
+          <div className="flex flex-col items-end">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">STATION CLOCKS</span>
+            <span className="text-sm font-mono text-zinc-300 flex items-center gap-2">
+              <span>{localTime}</span>
+              <span className="text-zinc-700">|</span>
+              <span className="text-zinc-500 text-xs">{utcTime}</span>
+            </span>
+          </div>
+
+          {/* Symmetrical Spec: Active Model */}
+          <div className="hidden sm:flex flex-col items-end border-l border-zinc-900 pl-8">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Active Model</span>
+            <span className="text-sm font-mono text-zinc-300">llama-3.3-70b-versatile</span>
+          </div>
+
+          {/* Symmetrical Spec: Voice Synthesis */}
+          <div className="flex flex-col items-end border-l border-zinc-900 pl-8" id="voice-selection">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Speaker Voice</span>
+            <div className="flex items-center gap-2 mt-0.5">
+              <select 
+                value={selectedVoice} 
+                onChange={(e) => setSelectedVoice(e.target.value)}
+                className="bg-transparent text-xs text-indigo-400 font-semibold focus:outline-none cursor-pointer font-mono"
+              >
+                <option value="Kore" className="bg-zinc-900 text-zinc-200">Kore (Balanced)</option>
+                <option value="Zephyr" className="bg-zinc-900 text-zinc-200">Zephyr (Cheerfully)</option>
+                <option value="Puck" className="bg-zinc-900 text-zinc-200">Puck (Crisp)</option>
+                <option value="Charon" className="bg-zinc-900 text-zinc-200">Charon (Deep)</option>
+                <option value="Fenrir" className="bg-zinc-900 text-zinc-200">Fenrir (Warm)</option>
+              </select>
+              <button 
+                onClick={triggerVoiceTest}
+                className={`p-1 rounded hover:bg-zinc-900 transition-colors ${isSpeaking ? "text-red-400 animate-pulse" : "text-zinc-500 hover:text-white"}`}
+                title="Test Speaker Config"
+              >
+                {isSpeaking ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Symmetrical Spec: System Latency indicator Node */}
+          <div className="flex items-center gap-3 border-l border-zinc-900 pl-8">
+            <div className="flex flex-col items-end mr-0.5">
+              <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">AURANET STATUS</span>
+              <span className="text-xs font-mono text-indigo-400">142ms</span>
+            </div>
+            <div className="relative flex h-3 h-3 justify-center items-center">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]"></span>
+            </div>
+          </div>
+
+        </div>
+      </header>
+
+      {/* Main Container: Symmetrical Split Grid */}
+      <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10" id="aura-desktop-grid">
+        
+        {/* Banner if credentials are unconfigured */}
+        {apiError && (
+          <div className="lg:col-span-12 p-5 bg-yellow-950/20 border border-yellow-850 rounded-xl flex items-start gap-4 text-yellow-300 shadow-xl" id="aura-api-notifier">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-yellow-500" />
+            <div className="text-sm flex-1">
+              <span className="font-semibold uppercase tracking-wider text-xs block mb-1">Aura completion warning:</span> {apiError}
+              <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
+                Please attach <code className="px-1.5 py-0.5 bg-zinc-900/80 rounded font-mono text-indigo-400">GROQ_API_KEY</code> and <code className="px-1.5 py-0.5 bg-zinc-900/80 rounded font-mono text-indigo-400">GEMINI_API_KEY</code> within your Secrets tab.
+              </p>
+            </div>
+            <button onClick={() => setApiError(null)} className="p-1 hover:bg-zinc-900 rounded">
+              <X className="w-4 h-4 text-zinc-500 hover:text-white" />
+            </button>
+          </div>
+        )}
+
+        {/* LEFT COLUMN (5 Columns): Elegant Symmetrical Orb Core & Audio Terminal */}
+        <section className="lg:col-span-5 flex flex-col gap-8" id="aura-assistant-panel">
+          
+          {/* Geometric Orb visualization widget card */}
+          <div className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-8 flex flex-col items-center justify-between min-h-[380px] relative overflow-hidden group shadow-xl">
+            
+            <div className="w-full flex justify-between items-center z-10">
+              <span className="text-[10px] font-mono tracking-widest text-indigo-400 flex items-center gap-1.5 uppercase">
+                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full" />
+                Geometric Oscillator
+              </span>
+              <span className="text-zinc-500 font-mono text-[10px] tracking-wide uppercase">
+                {isListening ? "MICROPHONE ON" : isThinking ? "PROCESSING" : isGeneratingVoice ? "SYNTHESIZING" : isSpeaking ? "PLAYING AUDIO" : "IDLE STATION"}
+              </span>
+            </div>
+
+            {/* Concentric Circle Symmetrical Core Rings */}
+            <div className="relative py-8 flex items-center justify-center w-full" id="aura-glowing-orb">
+              
+              {/* Pulsing state ripples backdrops */}
+              <AnimatePresence>
+                {isListening && (
+                  <motion.div
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1.6, opacity: [0, 0.35, 0] }}
+                    exit={{ scale: 0.8, opacity: 0 }}
+                    transition={{ repeat: Infinity, duration: 1.5, ease: "easeOut" }}
+                    className="absolute w-56 h-56 rounded-full bg-rose-500/10 blur-xl pointer-events-none"
+                  />
+                )}
+                {isSpeaking && (
+                  <motion.div
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1.8, opacity: [0, 0.45, 0] }}
+                    exit={{ scale: 0.9, opacity: 0 }}
+                    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                    className="absolute w-56 h-56 rounded-full bg-indigo-500/10 blur-xl pointer-events-none"
+                  />
+                )}
+              </AnimatePresence>
+
+              {/* Symmetrical nested rings layout of theme */}
+              <div className="w-[310px] h-[310px] rounded-full border border-zinc-800/80 flex items-center justify-center relative">
+                
+                {/* Secondary middle ring */}
+                <div className="w-[250px] h-[250px] rounded-full border border-zinc-700/60 flex items-center justify-center relative">
+                  
+                  {/* Third deep indigo shaded ring */}
+                  <div className="w-[190px] h-[190px] rounded-full border border-indigo-950/80 flex items-center justify-center bg-zinc-950/90 shadow-2xl relative">
+                    
+                    {/* Interactive Core Mic Activation Circle */}
+                    <motion.div
+                      animate={
+                        isListening
+                          ? { scale: [1, 1.12, 1], rotate: 45 }
+                          : isThinking
+                          ? { scale: [1, 1.05, 1], rotate: -45 }
+                          : isGeneratingVoice
+                          ? { scale: [1.02, 1.08, 1.02], rotate: 15 }
+                          : isSpeaking
+                          ? { scale: [1.02, 1.08, 1.02] }
+                          : { scale: [1, 1.03, 1] }
+                      }
+                      transition={
+                        isListening
+                          ? { repeat: Infinity, duration: 1.5, ease: "easeInOut" }
+                          : isThinking
+                          ? { repeat: Infinity, duration: 2, ease: "easeInOut" }
+                          : isGeneratingVoice
+                          ? { repeat: Infinity, duration: 1, ease: "easeInOut" }
+                          : isSpeaking
+                          ? { repeat: Infinity, duration: 0.8, ease: "easeInOut" }
+                          : { repeat: Infinity, duration: 4, ease: "easeInOut" }
+                      }
+                      className={`w-32 h-32 rounded-full flex flex-col items-center justify-center cursor-pointer z-10 transition-colors duration-500 shadow-2xl relative ${
+                        isListening 
+                          ? "bg-rose-950/30 border border-rose-500 shadow-rose-500/10"
+                          : isThinking
+                          ? "bg-indigo-950/40 border border-indigo-400 shadow-indigo-500/10"
+                          : isGeneratingVoice
+                          ? "bg-indigo-900/30 border border-indigo-500 shadow-indigo-500/10"
+                          : isSpeaking
+                          ? "bg-zinc-900 border border-indigo-500/50 shadow-indigo-500/10"
+                          : "bg-zinc-900 border border-zinc-800 hover:border-indigo-500/40 hover:bg-zinc-900/80"
+                      }`}
+                      onClick={toggleMicrophone}
+                    >
+                      {/* Audio waveform animations inside the inner ring */}
+                      {isSpeaking && (
+                        <div className="flex items-center gap-1.5 h-10 absolute bottom-3 justify-center w-full">
+                          <motion.div animate={{ height: [4, 20, 4] }} transition={{ repeat: Infinity, duration: 0.6 }} className="w-0.5 h-4 bg-indigo-500 rounded-full" />
+                          <motion.div animate={{ height: [8, 32, 8] }} transition={{ repeat: Infinity, duration: 0.5, delay: 0.1 }} className="w-0.5 h-8 bg-indigo-400 rounded-full" />
+                          <motion.div animate={{ height: [6, 24, 6] }} transition={{ repeat: Infinity, duration: 0.7, delay: 0.2 }} className="w-0.5 h-6 bg-indigo-500 rounded-full" />
+                        </div>
+                      )}
+
+                      {/* Icon inside circle */}
+                      <div className="z-10 flex flex-col items-center gap-2">
+                        <AnimatePresence mode="wait">
+                          {isListening ? (
+                            <motion.div
+                              key="mic-listening"
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                            >
+                              <Mic className="w-8 h-8 text-rose-400 animate-pulse" />
+                            </motion.div>
+                          ) : isGeneratingVoice ? (
+                            <motion.div
+                              key="mic-generating"
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                            >
+                              <Sparkles className="w-8 h-8 text-indigo-400 animate-pulse" />
+                            </motion.div>
+                          ) : isThinking ? (
+                            <motion.div
+                              key="mic-thinking"
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                            >
+                              <Sparkles className="w-8 h-8 text-indigo-400 animate-spin" />
+                            </motion.div>
+                          ) : isSpeaking ? (
+                            <motion.div
+                              key="mic-speaking"
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                              className="mb-4"
+                            >
+                              <Volume2 className="w-8 h-8 text-indigo-400 animate-bounce" />
+                            </motion.div>
+                          ) : (
+                            <motion.div
+                              key="mic-idle"
+                              initial={{ opacity: 0, scale: 0.5 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.5 }}
+                            >
+                              <MicOff className="w-8 h-8 text-zinc-500 group-hover:text-indigo-400 transition-colors" />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                    </motion.div>
+
+                  </div>
+                </div>
+
+                {/* Symmetrical Accents on rings matching Geometric Balance guidelines */}
+                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-[9px] uppercase tracking-wider text-zinc-400 font-mono">
+                  {isListening ? "Listening" : isThinking ? "Processing" : isGeneratingVoice ? "Preparing Voice" : isSpeaking ? "Synthesizing" : "Ready State"}
+                </div>
+
+                <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-[9px] uppercase tracking-wider text-indigo-400 font-mono">
+                  {isListening ? "Gain Auto" : isSpeaking ? "Voice: active" : "SPACEBAR MIC"}
+                </div>
+
+              </div>
+
+            </div>
+
+            {/* Tap Voice command action controller */}
+            <div className="w-full flex flex-col items-center gap-3 z-10" id="mic-controls">
+              <button
+                onClick={toggleMicrophone}
+                className={`w-full py-3 rounded-xl font-medium tracking-wider flex items-center justify-center gap-2.5 transition-all outline-none border ${
+                  isListening
+                    ? "bg-rose-950/80 hover:bg-rose-900/90 text-white border-rose-500/50 shadow-md shadow-rose-500/10"
+                    : "bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-500/40 hover:shadow-indigo-500/10 shadow-lg"
+                }`}
+              >
+                {isListening ? (
+                  <>
+                    <Mic className="w-4 h-4 text-white" />
+                    <span className="uppercase text-xs font-mono tracking-widest">TAP TO COMPLETE</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-4 h-4 text-white" />
+                    <span className="uppercase text-xs font-mono tracking-widest">START RECORD VOICE</span>
+                  </>
+                )}
+              </button>
+              
+              <div className="flex justify-between items-center w-full px-1 text-[10px] font-mono text-zinc-500">
+                <span>SHORTCUT KEY: SPACEBAR</span>
+                {!recognitionSupported && <span className="text-rose-400 font-bold">API NOT SUPPORTED</span>}
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive Console: styled with the Geometric theme highlight block */}
+          <div className="flex-1 bg-zinc-900/35 border border-zinc-850 rounded-2xl p-5 flex flex-col h-[340px] shadow-lg" id="aura-terminal">
+            <h3 className="text-[10px] text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2 font-mono">
+              <span className="w-1 h-3.5 bg-indigo-500" /> Recent Interaction / Console
+            </h3>
+
+            {/* Logs transcript viewer list */}
+            <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 font-sans text-xs scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+              {messages.map((msg, i) => (
+                <div 
+                  key={i} 
+                  className={`flex flex-col gap-1 rounded-xl p-3 border transition-colors ${
+                    msg.role === "user"
+                      ? "bg-zinc-950/80 border-zinc-800 ml-8 text-zinc-200"
+                      : msg.isCommand
+                      ? "bg-indigo-950/20 border-indigo-900/50 text-indigo-300"
+                      : "bg-zinc-900/30 border-zinc-850/60 mr-8 text-zinc-300"
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-[9px] font-mono text-zinc-500">
+                    <span className={msg.role === "user" ? "text-indigo-400" : msg.isCommand ? "text-indigo-300 font-bold" : "text-zinc-500"}>
+                      {msg.role === "user" ? "USER PROMPT" : msg.isCommand ? "⚡ DESKTOP COMMAND" : "AURA RESPONDENT"}
+                    </span>
+                    {msg.role === "assistant" && !msg.isCommand && (
+                      <button 
+                        onClick={() => copyResponseText(msg.content)}
+                        className="text-zinc-500 hover:text-zinc-300 transition-colors p-0.5"
+                        title="Copy Response text"
+                      >
+                        {copiedResponse ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    )}
+                  </div>
+                  <p className="whitespace-pre-line leading-relaxed mt-1 text-xs text-zinc-300 font-normal">
+                    {msg.content}
+                  </p>
+                </div>
+              ))}
+              
+              {isThinking && (
+                <div className="flex items-center gap-2 bg-zinc-900/20 border border-zinc-850 mr-8 rounded-xl p-3">
+                  <span className="text-[10px] font-mono text-zinc-400">Aura is thinking</span>
+                  <span className="flex gap-1">
+                    <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: "0ms" }} />
+                    <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: "150ms" }} />
+                    <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: "300ms" }} />
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Custom Input Console placeholder */}
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage(inputText);
+              }} 
+              className="mt-3 flex gap-2 border-t border-zinc-800/80 pt-3"
+            >
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Instruct voice command or ask questions..."
+                className="flex-1 bg-zinc-950 border border-zinc-800 focus:border-indigo-500/50 rounded-lg px-3 py-2 text-xs focus:outline-none placeholder:text-zinc-650 text-zinc-200"
+              />
+              <button
+                type="submit"
+                className="px-3.5 py-2 bg-zinc-900 hover:bg-zinc-850 active:bg-zinc-900 border border-zinc-800 rounded-lg text-xs font-mono text-zinc-300 transition-all"
+              >
+                SUBMIT
+              </button>
+            </form>
+          </div>
+        </section>
+
+
+        {/* RIGHT COLUMN (7 Columns): Widgets & Desktop Productivity Hub */}
+        <section className="lg:col-span-7 flex flex-col gap-8" id="aura-widgets-panel">
+          
+          {/* Bento Widgets Row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            
+            {/* WIDGET 1: Pomodoro Focus clock styled in Geometric symmetry */}
+            <div className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-6 flex flex-col shadow-xl relative overflow-hidden h-[300px]">
+              
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5 mb-3">
+                <h3 className="text-[10px] text-zinc-500 uppercase tracking-widest flex items-center gap-2 font-mono">
+                  <span className="w-1 h-3.5 bg-indigo-500"></span> App Focus Timer
+                </h3>
+                <span className={`text-[9px] font-mono px-2 py-0.5 rounded uppercase ${isTimerRunning ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-zinc-800 text-zinc-400"}`}>
+                  {isTimerRunning ? "ACTIVE" : "STANDBY"}
+                </span>
+              </div>
+
+              {/* Concentric Countdown Circle */}
+              <div className="flex-1 flex items-center justify-around py-2">
+                
+                {/* SVG Progress Circle built inside theme styling */}
+                <div className="relative w-36 h-36 flex items-center justify-center">
+                  <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                    <circle
+                      cx="72"
+                      cy="72"
+                      r="62"
+                      className="stroke-zinc-850"
+                      strokeWidth="5"
+                      fill="transparent"
+                    />
+                    <motion.circle
+                      cx="72"
+                      cy="72"
+                      r="62"
+                      className="stroke-indigo-500"
+                      strokeWidth="5"
+                      fill="transparent"
+                      strokeDasharray="390"
+                      animate={{ strokeDashoffset: (390 * (100 - getTimerProgressPercent())) / 100 }}
+                      transition={{ ease: "linear", duration: 1 }}
+                    />
+                  </svg>
+                  
+                  {/* Concentric countdown numbers */}
+                  <div className="text-center z-10">
+                    <h4 className="text-2xl font-mono font-bold text-zinc-100 tracking-wider font-mono">{formatTimerLabel()}</h4>
+                    <p className="text-[9px] font-mono text-zinc-500 mt-0.5 uppercase tracking-wide">
+                      {Math.ceil(timerDuration / 60)} MIN CYCLE
+                    </p>
+                  </div>
+                </div>
+
+                {/* Symmetrical clock controller triggers */}
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={() => setIsTimerRunning(!isTimerRunning)}
+                    className={`p-3 rounded-xl flex items-center justify-center transition-all ${
+                      isTimerRunning
+                        ? "bg-zinc-800 hover:bg-zinc-750 text-amber-500 border border-zinc-700/60"
+                        : "bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-500"
+                    }`}
+                    title={isTimerRunning ? "Pause Timer" : "Start timer countdown"}
+                  >
+                    {isTimerRunning ? <Pause className="w-4 h-4 text-amber-500" /> : <Play className="w-4 h-4 fill-white text-white" />}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setIsTimerRunning(false);
+                      setTimerLeft(timerDuration);
+                    }}
+                    className="p-3 rounded-xl bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-white transition-all animate-none"
+                    title="Reset focus session"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Symmetrical Presets Buttons */}
+              <div className="grid grid-cols-3 gap-2 mt-1">
+                <button 
+                  onClick={() => applyTimerPreset(15)} 
+                  className="py-1 px-2.5 rounded bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-[10px] font-mono text-zinc-400 hover:text-indigo-400 transition-colors"
+                >
+                  15m Short
+                </button>
+                <button 
+                  onClick={() => applyTimerPreset(25)} 
+                  className="py-1 px-2.5 rounded bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-[10px] font-mono text-zinc-400 hover:text-indigo-400 transition-colors"
+                >
+                  25m Focus
+                </button>
+                <button 
+                  onClick={() => applyTimerPreset(50)} 
+                  className="py-1 px-2.5 rounded bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-[10px] font-mono text-zinc-400 hover:text-indigo-400 transition-colors"
+                >
+                  50m Deep
+                </button>
+              </div>
+            </div>
+
+
+            {/* WIDGET 2: Aura Google Workspace and Gmail Cloud Sync and Assist */}
+            <AuraWorkspace
+              onSyncNotes={(newNotes) => {
+                setNotes(newNotes);
+                localStorage.setItem("aura_notes", JSON.stringify(newNotes));
+              }}
+              onSyncMessages={(newMsgs) => {
+                setMessages(newMsgs);
+              }}
+              currentNotes={notes}
+              currentMessages={messages}
+              onTriggerSpeech={(text) => executeVoiceSynthesis(text)}
+              onAddAssistantMessage={(text) => {
+                setMessages(prev => [...prev, { role: "assistant", content: text }]);
+              }}
+            />
+          </div>
+
+
+          {/* WIDGET 3: Symmetrical Desktop Checklist Scratchpad */}
+          <div className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-6 flex flex-col shadow-xl flex-1 min-h-[300px]">
+            
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3 mb-4">
+              <h3 className="text-sm font-mono text-indigo-400 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-indigo-400" />
+                DESKTOP SCRATCHPAD
+              </h3>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] font-mono text-zinc-500 tracking-wide uppercase">{notes.length} ACTIVE NOTES</span>
+                {notes.length > 0 && (
+                  <button 
+                    onClick={clearAllNotes}
+                    className="text-[10px] font-mono font-semibold text-red-400 hover:text-red-300 hover:underline flex items-center"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Quick manual text note checklist form */}
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (manualNoteText.trim()) {
+                  addScratchnote(manualNoteText);
+                  setManualNoteText("");
+                }
+              }} 
+              className="flex gap-2 mb-4"
+            >
+              <input
+                type="text"
+                value={manualNoteText}
+                onChange={(e) => setManualNoteText(e.target.value)}
+                placeholder="Insert scratchpad notes or checklist tasks..."
+                className="flex-1 bg-zinc-950 border border-zinc-800 focus:border-indigo-500/30 rounded-lg px-3 py-2 text-xs focus:outline-none placeholder:text-zinc-650 text-zinc-200"
+              />
+              <button
+                type="submit"
+                className="px-3.5 bg-indigo-900/20 hover:bg-indigo-900/35 border border-indigo-700/30 rounded-lg text-xs font-mono font-medium text-indigo-400 transition-all flex items-center justify-center cursor-pointer"
+              >
+                <Plus className="w-4 h-4 text-indigo-400" />
+              </button>
+            </form>
+
+            {/* Notes checklist stack holder */}
+            <div className="flex-1 overflow-y-auto space-y-2.5 max-h-[220px] pr-1 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent bg-zinc-950/20 rounded-xl p-3 border border-zinc-850/60">
+              {notes.length === 0 ? (
+                <div className="h-32 flex flex-col items-center justify-center text-zinc-600 font-sans text-xs gap-1.5">
+                  <FileText className="w-8 h-8 text-zinc-700 stroke-1" />
+                  <p className="font-light">No notes in the scratchpad.</p>
+                  <p className="text-zinc-700 text-[10px] font-mono uppercase tracking-wider">Say "create note [your task]" to auto-generate</p>
+                </div>
+              ) : (
+                <AnimatePresence initial={false}>
+                  {notes.map((note) => (
+                    <motion.div
+                      key={note.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      className="p-3 bg-zinc-950 border border-zinc-850 hover:border-zinc-800 rounded-xl flex items-start justify-between gap-3 group relative hover:bg-zinc-900/20 transition-all"
+                    >
+                      <div className="flex-1 min-w-0 pr-8">
+                        <span className="text-[10px] font-mono text-zinc-505">{note.timestamp}</span>
+                        <p className="text-xs text-zinc-300 font-normal mt-0.5 leading-relaxed break-words whitespace-pre-line">
+                          {note.content}
+                        </p>
+                      </div>
+
+                      {/* Floating actions */}
+                      <div className="opacity-30 group-hover:opacity-100 flex items-center gap-1.5 transition-all absolute right-2.5 top-2.5 bg-zinc-950 group-hover:bg-zinc-900 p-0.5 rounded border border-zinc-800">
+                        <button
+                          onClick={() => copyNoteText(note.id, note.content)}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors"
+                          title="Copy Sticky Content"
+                        >
+                          {copiedNoteId === note.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => deleteScratchnote(note.id)}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-rose-450 transition-colors"
+                          title="Delete note"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 hover:text-rose-400" />
+                        </button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              )}
+            </div>
+          </div>
+        </section>
+
+      </main>
+
+      {/* Symmetrical Balanced Footer */}
+      <footer className="border-t border-zinc-900 bg-zinc-950 px-8 py-5 text-center text-[10px] tracking-wider font-mono text-zinc-600 flex flex-col md:flex-row justify-between items-center max-w-7xl mx-auto w-full gap-4 transition-all">
+        <div>
+          <span>⌥ SPACEBAR SHORTCUT: ACTIVATE/DEACTIVATE SYSTEM MICROPHONE INPUT</span>
+        </div>
+        <div className="flex gap-4">
+          <span className="flex items-center gap-1.5 bg-zinc-900 px-2 py-1 rounded text-zinc-500 border border-zinc-850">
+            COMPLETION: GROQ LLAMA
+          </span>
+          <span className="flex items-center gap-1.5 bg-zinc-900 px-2 py-1 rounded text-zinc-500 border border-zinc-850">
+            TTS: GEMINI VOICE PLUGINS
+          </span>
+        </div>
+      </footer>
+
+    </div>
+  );
+}
