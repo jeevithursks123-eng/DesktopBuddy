@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Mic, MicOff, Play, Pause, RotateCcw, Volume2, VolumeX, Plus, Trash2, 
   Copy, Check, Sparkles, Clock, FileText, Keyboard, AlertTriangle, 
-  HelpCircle, CheckSquare, ChevronRight, X, ExternalLink
+  HelpCircle, CheckSquare, ChevronRight, X, ExternalLink, Search, Loader2, Globe
 } from "lucide-react";
 
 interface Note {
@@ -27,15 +27,24 @@ export default function App() {
   // Navigation or Tabs - None as per Single-View Constraint!
   // App states
   const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "Hello! I am Aura, your desktop voice assistant. Pick a voice or press the Spacebar to speak relative commands like 'start focus timer for 25 minutes' or 'create note: check my calendar today'." }
+    { role: "assistant", content: "Hello! I am Aura, your desktop voice assistant. Pick a language or voice, or press the Spacebar to speak relative commands. I now understand English, Hindi (हिंदी), and Kannada (ಕನ್ನಡ)!" }
   ]);
   const [inputText, setInputText] = useState("");
+  const [selectedLanguage, setSelectedLanguage] = useState("en-US");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState("Kore");
   const [apiError, setApiError] = useState<string | null>(null);
+
+  // Search Engine Widget states
+  const [searchEngine, setSearchEngine] = useState<"google" | "duckduckgo">("google");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchAnswer, setSearchAnswer] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
   
   // Real-time clocks
   const [localTime, setLocalTime] = useState("");
@@ -83,7 +92,7 @@ export default function App() {
     const rec = new SpeechRecognition();
     rec.continuous = false;
     rec.interimResults = true;
-    rec.lang = "en-US";
+    rec.lang = selectedLanguage;
 
     rec.onstart = () => {
       setIsListening(true);
@@ -120,6 +129,13 @@ export default function App() {
 
     recognitionRef.current = rec;
   }, []);
+
+  // Sync selectedLanguage with speech recognizer instance
+  useEffect(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = selectedLanguage;
+    }
+  }, [selectedLanguage]);
 
   // Load Scratchpad values from localStorage
   useEffect(() => {
@@ -237,13 +253,12 @@ export default function App() {
 
   // Helper to strip markdown and shorten text to 1-2 clean sentences for fast sub-second voice synthesis
   const getSpeechFriendlyText = (fullText: string): string => {
-    // Strip code blocks, inline code, bold, links, and non-ascii emojis
+    // Strip code blocks, inline code, bold, links, and non-ascii emojis (preserving non-latin text like Kannada/Hindi)
     let text = fullText
       .replace(/```[\s\S]*?```/g, "Code block omitted.")
       .replace(/`[\s\S]*?`/g, "")
       .replace(/\*\*|_\*|~~|`/g, "")
       .replace(/\[.*?\]\(.*?\)/g, "")
-      .replace(/[^\x00-\x7F]/g, "") // remove emoji chars
       .trim();
 
     // Max up to the first 2 sentences to ensure neat quick spoken sentences
@@ -280,61 +295,118 @@ export default function App() {
       const utterance = new SpeechSynthesisUtterance(conversationalText);
       const voices = window.speechSynthesis.getVoices();
 
-      // Implement pitch/rate mappings to preserve distinct voice personality profiles
-      if (selectedVoice === "Zephyr") {
-        utterance.rate = 1.15;
-        utterance.pitch = 1.35;
-        const femaleVoice = voices.find(
-          (v) =>
-            v.lang.startsWith("en") &&
-            (v.name.toLowerCase().includes("female") ||
-              v.name.toLowerCase().includes("zira") ||
-              v.name.toLowerCase().includes("google") ||
-              v.name.toLowerCase().includes("samantha"))
-        );
-        if (femaleVoice) utterance.voice = femaleVoice;
-      } else if (selectedVoice === "Charon") {
-        utterance.rate = 0.85;
-        utterance.pitch = 0.65;
-        const maleVoice = voices.find(
-          (v) =>
-            v.lang.startsWith("en") &&
-            (v.name.toLowerCase().includes("male") ||
-              v.name.toLowerCase().includes("david") ||
-              v.name.toLowerCase().includes("hazel"))
-        );
-        if (maleVoice) utterance.voice = maleVoice;
-      } else if (selectedVoice === "Puck") {
-        utterance.rate = 1.25;
-        utterance.pitch = 1.15;
-        const ukVoice = voices.find(
-          (v) =>
-            v.lang.startsWith("en") &&
-            (v.name.toLowerCase().includes("gb") ||
-              v.name.toLowerCase().includes("uk") ||
-              v.name.toLowerCase().includes("samantha"))
-        );
-        if (ukVoice) utterance.voice = ukVoice;
-      } else if (selectedVoice === "Fenrir") {
-        utterance.rate = 0.95;
-        utterance.pitch = 0.85;
-        const maleVoice = voices.find(
-          (v) =>
-            v.lang.startsWith("en") &&
-            (v.name.toLowerCase().includes("male") ||
-              v.name.toLowerCase().includes("david") ||
-              v.name.toLowerCase().includes("google"))
-        );
-        if (maleVoice) utterance.voice = maleVoice;
-      } else {
-        // "Kore" Balanced DEFAULT
-        utterance.rate = 1.0;
-        utterance.pitch = 1.0;
-        const defaultEn = voices.find((v) => v.lang.startsWith("en"));
-        if (defaultEn) utterance.voice = defaultEn;
+      // Check for Kannada/Hindi Unicode character presence in target conversational text
+      const hasKannada = /[\u0C80-\u0CFF]/.test(conversationalText);
+      const hasHindi = /[\u0900-\u097F]/.test(conversationalText);
+
+      let targetLang = selectedLanguage;
+      if (hasKannada) {
+        targetLang = "kn-IN";
+      } else if (hasHindi) {
+        targetLang = "hi-IN";
       }
 
-      // General fallback if custom voice selection is null
+      utterance.lang = targetLang;
+
+      let selectedVoiceObj = null;
+
+      // 1. High-precision native matching with intelligent fallbacks
+      if (hasKannada) {
+        // Try searching for any active Kannada local voice
+        selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("kn"));
+        if (!selectedVoiceObj) {
+          // Crucial fallback: Use English (India) to speak with an easily comprehensible local regional accent
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
+        }
+        if (!selectedVoiceObj) {
+          // Look for any alternate Indian voice fallback
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().includes("in") || v.name.toLowerCase().includes("india"));
+        }
+      } else if (hasHindi) {
+        // Try searching for any active Hindi local voice
+        selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("hi"));
+        if (!selectedVoiceObj) {
+          // Crucial fallback: Use English (India)
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
+        }
+        if (!selectedVoiceObj) {
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().includes("in") || v.name.toLowerCase().includes("india"));
+        }
+      }
+
+      // 2. Consistent English voice profiling with adaptive regional tone matching
+      if (!selectedVoiceObj) {
+        const isIndiaPreset = ["kn-IN", "hi-IN", "en-IN"].includes(selectedLanguage);
+        
+        // Segment voices into local Indian accented and global English sets
+        const enInVoices = voices.filter(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
+        const baseVoicePool = (isIndiaPreset && enInVoices.length > 0) ? enInVoices : (voices.length > 0 ? voices : []);
+
+        if (selectedVoice === "Zephyr") {
+          utterance.rate = 1.15;
+          utterance.pitch = 1.25;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("female") ||
+              v.name.toLowerCase().includes("zira") ||
+              v.name.toLowerCase().includes("google") ||
+              v.name.toLowerCase().includes("samantha") ||
+              v.name.toLowerCase().includes("heera") ||
+              v.name.toLowerCase().includes("rhea") ||
+              v.name.toLowerCase().includes("veena")
+          );
+        } else if (selectedVoice === "Charon") {
+          utterance.rate = 0.85;
+          utterance.pitch = 0.70;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("male") ||
+              v.name.toLowerCase().includes("david") ||
+              v.name.toLowerCase().includes("hazel") ||
+              v.name.toLowerCase().includes("rishi") ||
+              v.name.toLowerCase().includes("ravi") ||
+              v.name.toLowerCase().includes("google")
+          );
+        } else if (selectedVoice === "Puck") {
+          utterance.rate = 1.25;
+          utterance.pitch = 1.15;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("gb") ||
+              v.name.toLowerCase().includes("uk") ||
+              v.name.toLowerCase().includes("samantha") ||
+              v.name.toLowerCase().includes("rishi") ||
+              v.name.toLowerCase().includes("google")
+          );
+        } else if (selectedVoice === "Fenrir") {
+          utterance.rate = 0.95;
+          utterance.pitch = 0.85;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("male") ||
+              v.name.toLowerCase().includes("david") ||
+              v.name.toLowerCase().includes("google") ||
+              v.name.toLowerCase().includes("ravi")
+          );
+        }
+
+        // Absolute default fallback configuration
+        if (!selectedVoiceObj) {
+          utterance.rate = 1.0;
+          utterance.pitch = 1.0;
+          if (isIndiaPreset && enInVoices.length > 0) {
+            selectedVoiceObj = enInVoices[0];
+          } else {
+            selectedVoiceObj = voices.find(v => v.lang.toLowerCase().startsWith("en")) || voices[0];
+          }
+        }
+      }
+
+      if (selectedVoiceObj) {
+        utterance.voice = selectedVoiceObj;
+      }
+
+      // Custom browser handling fallback safety
       if (!utterance.voice && voices.length > 0) {
         const fallbackEn = voices.find((v) => v.lang.toLowerCase().includes("en"));
         if (fallbackEn) {
@@ -517,7 +589,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: trimmed,
-          history: messages.map(m => ({ role: m.role, content: m.content }))
+          history: messages.map(m => ({ role: m.role, content: m.content })),
+          language: selectedLanguage
         })
       });
 
@@ -537,6 +610,46 @@ export default function App() {
       console.error("Chat request failed:", err);
       setApiError(err.message || "An unexpected error occurred while communicating with Groq.");
       setIsThinking(false);
+    }
+  };
+
+  // Execute server-side search querying Google (Gemini Grounding) or DuckDuckGo scraper
+  const handleWebSearchExecute = async (queryToSearch?: string) => {
+    const q = queryToSearch || searchQuery;
+    const trimmed = q.trim();
+    if (!trimmed) return;
+
+    setIsSearching(true);
+    setSearchError(null);
+    setSearchResults([]);
+    setSearchAnswer(null);
+
+    try {
+      const res = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: trimmed, engine: searchEngine })
+      });
+
+      const data = await res.json();
+      setIsSearching(false);
+
+      if (data.error) {
+        setSearchError(data.error);
+        return;
+      }
+
+      setSearchAnswer(data.answer);
+      setSearchResults(data.results || []);
+
+      // Voice the summary search response aloud
+      if (data.answer) {
+        await executeVoiceSynthesis(data.answer);
+      }
+    } catch (err: any) {
+      console.error("Web Search failed:", err);
+      setSearchError(err.message || "Failed to execute search. Check server connectivity.");
+      setIsSearching(false);
     }
   };
 
@@ -621,6 +734,23 @@ export default function App() {
           <div className="hidden sm:flex flex-col items-end border-l border-zinc-900 pl-8">
             <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Active Model</span>
             <span className="text-sm font-mono text-zinc-300">llama-3.3-70b-versatile</span>
+          </div>
+
+          {/* Symmetrical Spec: Input Language */}
+          <div className="flex flex-col items-end border-l border-zinc-900 pl-8" id="language-selection">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">System Language</span>
+            <div className="flex items-center gap-2 mt-0.5">
+              <select 
+                value={selectedLanguage} 
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                className="bg-transparent text-xs text-indigo-400 font-semibold focus:outline-none cursor-pointer font-mono"
+              >
+                <option value="en-US" className="bg-zinc-900 text-zinc-200">English (US)</option>
+                <option value="en-IN" className="bg-zinc-900 text-zinc-200">English (India)</option>
+                <option value="hi-IN" className="bg-zinc-900 text-zinc-200">Hindi (हिंदी)</option>
+                <option value="kn-IN" className="bg-zinc-900 text-zinc-200">Kannada (ಕನ್ನಡ)</option>
+              </select>
+            </div>
           </div>
 
           {/* Symmetrical Spec: Voice Synthesis */}
@@ -1060,9 +1190,136 @@ export default function App() {
               </div>
             </div>
 
-
           </div>
 
+          {/* WIDGET 2: Desktop Search Engine (Google Search Grounding & DuckDuckGo) */}
+          <div className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-6 flex flex-col shadow-xl relative overflow-hidden" id="aura-search-widget">
+            
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5 mb-3">
+              <h3 className="text-[10px] text-zinc-500 uppercase tracking-widest flex items-center gap-2 font-mono">
+                <span className="w-1 h-3.5 bg-indigo-505 bg-indigo-500" /> Aura Search Engine
+              </h3>
+              
+              {/* Engine Selector */}
+              <div className="flex bg-zinc-950/80 p-0.5 rounded-lg border border-zinc-800 animate-none" id="search-engine-selector">
+                <button
+                  type="button"
+                  onClick={() => setSearchEngine("google")}
+                  className={`px-2 py-1 text-[9px] font-mono font-semibold rounded transition-colors ${searchEngine === "google" ? "bg-indigo-600 text-white shadow" : "text-zinc-400 hover:text-zinc-200"}`}
+                >
+                  GOOGLE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSearchEngine("duckduckgo")}
+                  className={`px-2 py-1 text-[9px] font-mono font-semibold rounded transition-colors ${searchEngine === "duckduckgo" ? "bg-indigo-600 text-white shadow" : "text-zinc-400 hover:text-zinc-200"}`}
+                >
+                  DUCKDUCKGO
+                </button>
+              </div>
+            </div>
+
+            {/* Search Form and Input */}
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleWebSearchExecute();
+              }}
+              className="flex gap-2"
+            >
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={`Search the web using ${searchEngine === "google" ? "Google" : "DuckDuckGo"}...`}
+                  className="w-full bg-zinc-950 border border-zinc-800 focus:border-indigo-500/50 rounded-xl pl-9 pr-3 py-2 text-xs focus:outline-none placeholder:text-zinc-650 text-zinc-200"
+                />
+                <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              </div>
+              <button
+                type="submit"
+                disabled={isSearching}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 border border-indigo-500 text-white rounded-xl text-xs font-semibold hover:shadow-indigo-500/10 hover:shadow-lg transition-all flex items-center gap-1.5"
+              >
+                {isSearching ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>SEARCHING...</span>
+                  </>
+                ) : (
+                  <span>SEARCH</span>
+                )}
+              </button>
+            </form>
+
+            {/* Dynamic Results Display */}
+            <div className="mt-4 flex-1 flex flex-col justify-start min-h-[140px] max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+              {isSearching && (
+                <div className="flex-1 flex flex-col items-center justify-center py-6 text-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-500 mb-2" />
+                  <p className="text-xs text-zinc-400 font-mono">Crawling results using {searchEngine === "google" ? "Google Grounding Network" : "DuckDuckGo Proxy"}...</p>
+                </div>
+              )}
+
+              {searchError && (
+                <div className="p-3 bg-red-950/25 border border-red-900/40 text-red-400 rounded-xl text-xs flex gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-red-550" />
+                  <div>
+                    <p className="font-semibold uppercase tracking-wider text-[10px]">Search Operation Exception:</p>
+                    <p className="mt-0.5">{searchError}</p>
+                  </div>
+                </div>
+              )}
+
+              {!isSearching && !searchError && !searchAnswer && searchResults.length === 0 && (
+                <div className="flex-1 flex flex-col items-center justify-center py-8 text-center text-zinc-600">
+                  <Globe className="w-7 h-7 text-zinc-800 mb-2" />
+                  <p className="text-xs">No active search queries executed</p>
+                  <p className="text-[10px] text-zinc-600 font-mono mt-1">Submit a search query above to view inline summaries & links</p>
+                </div>
+              )}
+
+              {/* Show structured summarized answer */}
+              {searchAnswer && !isSearching && (
+                <div className="mb-4 p-3.5 bg-zinc-950 border border-zinc-850 rounded-xl">
+                  <span className="text-[9px] font-mono uppercase tracking-widest text-indigo-400 font-bold block mb-1">Aura Answer Summary</span>
+                  <p className="text-xs text-zinc-300 leading-relaxed font-sans">{searchAnswer}</p>
+                </div>
+              )}
+
+              {/* Show list of crawled URLs */}
+              {searchResults.length > 0 && !isSearching && (
+                <div className="space-y-2">
+                  <span className="text-[9px] font-mono uppercase tracking-widest text-zinc-550 font-semibold block px-1 mb-1">Source Results</span>
+                  {searchResults.map((result, idx) => (
+                    <a
+                      key={idx}
+                      href={result.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block p-3 bg-zinc-900/35 hover:bg-zinc-900/85 border border-zinc-850/60 hover:border-zinc-800 rounded-xl transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-zinc-200 hover:text-indigo-400 transition-colors truncate">
+                          {result.title}
+                        </span>
+                        <ExternalLink className="w-3 h-3 text-zinc-600 flex-shrink-0" />
+                      </div>
+                      <span className="text-[10px] text-zinc-500 block truncate mt-0.5 font-mono">
+                        {result.url}
+                      </span>
+                      {result.snippet && result.snippet !== "Verified search source" && (
+                        <p className="text-[11px] text-zinc-400 mt-1 lines-clamp-2 leading-relaxed">
+                          {result.snippet}
+                        </p>
+                      )}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* WIDGET 3: Symmetrical Desktop Checklist Scratchpad */}
           <div className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-6 flex flex-col shadow-xl flex-1 min-h-[300px]">
