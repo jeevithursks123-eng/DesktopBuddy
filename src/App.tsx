@@ -57,10 +57,6 @@ export default function App() {
   
   // Audio playback ref
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  
-  // Track consecutive spoken utterances in memory to prevent Garbage Collection couper-off issue
-  const activeUtterancesRef = useRef<SpeechSynthesisUtterance[]>([]);
-  const currentChunkIndexRef = useRef<number>(0);
 
   // Desktop Scratchpad state
   const [notes, setNotes] = useState<Note[]>([]);
@@ -252,80 +248,39 @@ export default function App() {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
-    activeUtterancesRef.current = [];
-    currentChunkIndexRef.current = 0;
     setIsSpeaking(false);
   };
 
-  // Helper to split long text into clean, individual sentence-level speech-friendly chunks
-  const splitTextIntoNaturalChunks = (text: string): string[] => {
+  // Helper to strip markdown and shorten text to 1-2 clean sentences for fast sub-second voice synthesis
+  const getSpeechFriendlyText = (fullText: string): string => {
     // Strip code blocks, inline code, bold, links, and non-ascii emojis (preserving non-latin text like Kannada/Hindi)
-    let clean = text
+    let text = fullText
       .replace(/```[\s\S]*?```/g, "Code block omitted.")
       .replace(/`[\s\S]*?`/g, "")
       .replace(/\*\*|_\*|~~|`/g, "")
       .replace(/\[.*?\]\(.*?\)/g, "")
       .trim();
 
-    if (!clean) {
-      return ["Active command completed."];
+    // Max up to the first 2 sentences to ensure neat quick spoken sentences
+    const sentences = text.match(/[^.!?]+[.!?]+/g);
+    if (sentences && sentences.length > 2) {
+      text = sentences.slice(0, 2).join(" ");
     }
 
-    // Split on typical sentence boundaries across multiple scripts: . ? ! ; । \n and Kannada full-stops
-    const r = /([^.!?;\n।]+[.!?;\n।]*)/g;
-    const parts = clean.match(r) || [clean];
-    const chunks: string[] = [];
-    let currentChunk = "";
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i].trim();
-      if (!part) continue;
-
-      // Handle long clauses without structure by splitting on word boundaries
-      if (part.length > 150) {
-        if (currentChunk) {
-          chunks.push(currentChunk.trim());
-          currentChunk = "";
-        }
-        const words = part.split(/(\s+)/);
-        let temp = "";
-        for (const w of words) {
-          if ((temp + w).length > 120) {
-            if (temp.trim()) {
-              chunks.push(temp.trim());
-            }
-            temp = w;
-          } else {
-            temp += w;
-          }
-        }
-        if (temp.trim()) {
-          currentChunk = temp;
-        }
-      } else {
-        if ((currentChunk + " " + part).length > 150) {
-          if (currentChunk.trim()) {
-            chunks.push(currentChunk.trim());
-          }
-          currentChunk = part;
-        } else {
-          currentChunk = currentChunk ? (currentChunk + " " + part) : part;
-        }
-      }
+    if (text.length > 180) {
+      text = text.substring(0, 180) + "...";
     }
 
-    if (currentChunk.trim()) {
-      chunks.push(currentChunk.trim());
-    }
-
-    return chunks.map(c => c.trim()).filter(Boolean);
+    return text.trim() || "Active command completed.";
   };
 
-  // Perform TTS speech synthesis using low-latency native browser Web Speech API with safe recursive sequence playing
+  // Perform TTS speech synthesis using low-latency native browser Web Speech API
   const executeVoiceSynthesis = async (text: string) => {
     try {
       stopCurrentPlayback();
       setIsGeneratingVoice(true);
+
+      const conversationalText = getSpeechFriendlyText(text);
 
       if (typeof window === "undefined" || !("speechSynthesis" in window)) {
         console.warn("Speech synthesis not supported in this browser context.");
@@ -333,178 +288,146 @@ export default function App() {
         return;
       }
 
-      // Generate a sequence of human-rate natural speakable chunks
-      const chunks = splitTextIntoNaturalChunks(text);
-      if (chunks.length === 0) {
-        setIsGeneratingVoice(false);
-        return;
-      }
-
+      // Short delay simulated to prevent instant flash of preparation
       setIsGeneratingVoice(false);
       setIsSpeaking(true);
 
+      const utterance = new SpeechSynthesisUtterance(conversationalText);
       const voices = window.speechSynthesis.getVoices();
-      currentChunkIndexRef.current = 0;
-      activeUtterancesRef.current = [];
 
-      const speakNextChunk = () => {
-        // Stop if user cancelled or we finished all chunks
-        if (currentChunkIndexRef.current >= chunks.length) {
-          setIsSpeaking(false);
-          activeUtterancesRef.current = [];
-          return;
-        }
+      // Check for Kannada/Hindi Unicode character presence in target conversational text
+      const hasKannada = /[\u0C80-\u0CFF]/.test(conversationalText);
+      const hasHindi = /[\u0900-\u097F]/.test(conversationalText);
 
-        const chunkText = chunks[currentChunkIndexRef.current];
-        const utterance = new SpeechSynthesisUtterance(chunkText);
+      let targetLang = selectedLanguage;
+      if (hasKannada) {
+        targetLang = "kn-IN";
+      } else if (hasHindi) {
+        targetLang = "hi-IN";
+      }
 
-        // Check for Kannada/Hindi Unicode character presence in current chunk
-        const hasKannada = /[\u0C80-\u0CFF]/.test(chunkText);
-        const hasHindi = /[\u0900-\u097F]/.test(chunkText);
+      utterance.lang = targetLang;
 
-        let targetLang = selectedLanguage;
-        if (hasKannada) {
-          targetLang = "kn-IN";
-        } else if (hasHindi) {
-          targetLang = "hi-IN";
-        }
+      let selectedVoiceObj = null;
 
-        utterance.lang = targetLang;
-
-        let selectedVoiceObj = null;
-
-        // 1. High-precision native matching with intelligent fallbacks
-        if (hasKannada) {
-          // Try searching for any active Kannada local voice
-          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("kn"));
-          if (!selectedVoiceObj) {
-            // Crucial fallback: Use English (India) to speak with an easily comprehensible local regional accent
-            selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
-          }
-          if (!selectedVoiceObj) {
-            // Look for any alternate Indian voice fallback
-            selectedVoiceObj = voices.find(v => v.lang.toLowerCase().includes("in") || v.name.toLowerCase().includes("india"));
-          }
-        } else if (hasHindi) {
-          // Try searching for any active Hindi local voice
-          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("hi"));
-          if (!selectedVoiceObj) {
-            // Crucial fallback: Use English (India)
-            selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
-          }
-          if (!selectedVoiceObj) {
-            selectedVoiceObj = voices.find(v => v.lang.toLowerCase().includes("in") || v.name.toLowerCase().includes("india"));
-          }
-        }
-
-        // 2. Consistent English voice profiling with adaptive regional tone matching
+      // 1. High-precision native matching with intelligent fallbacks
+      if (hasKannada) {
+        // Try searching for any active Kannada local voice
+        selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("kn"));
         if (!selectedVoiceObj) {
-          const isIndiaPreset = ["kn-IN", "hi-IN", "en-IN"].includes(selectedLanguage);
-          
-          // Segment voices into local Indian accented and global English sets
-          const enInVoices = voices.filter(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
-          const baseVoicePool = (isIndiaPreset && enInVoices.length > 0) ? enInVoices : (voices.length > 0 ? voices : []);
+          // Crucial fallback: Use English (India) to speak with an easily comprehensible local regional accent
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
+        }
+        if (!selectedVoiceObj) {
+          // Look for any alternate Indian voice fallback
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().includes("in") || v.name.toLowerCase().includes("india"));
+        }
+      } else if (hasHindi) {
+        // Try searching for any active Hindi local voice
+        selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("hi"));
+        if (!selectedVoiceObj) {
+          // Crucial fallback: Use English (India)
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
+        }
+        if (!selectedVoiceObj) {
+          selectedVoiceObj = voices.find(v => v.lang.toLowerCase().includes("in") || v.name.toLowerCase().includes("india"));
+        }
+      }
 
-          if (selectedVoice === "Zephyr") {
-            utterance.rate = 1.15;
-            utterance.pitch = 1.25;
-            selectedVoiceObj = baseVoicePool.find(
-              (v) =>
-                v.name.toLowerCase().includes("female") ||
-                v.name.toLowerCase().includes("zira") ||
-                v.name.toLowerCase().includes("google") ||
-                v.name.toLowerCase().includes("samantha") ||
-                v.name.toLowerCase().includes("heera") ||
-                v.name.toLowerCase().includes("rhea") ||
-                v.name.toLowerCase().includes("veena")
-            );
-          } else if (selectedVoice === "Charon") {
-            utterance.rate = 0.85;
-            utterance.pitch = 0.70;
-            selectedVoiceObj = baseVoicePool.find(
-              (v) =>
-                v.name.toLowerCase().includes("male") ||
-                v.name.toLowerCase().includes("david") ||
-                v.name.toLowerCase().includes("hazel") ||
-                v.name.toLowerCase().includes("rishi") ||
-                v.name.toLowerCase().includes("ravi") ||
-                v.name.toLowerCase().includes("google")
-            );
-          } else if (selectedVoice === "Puck") {
-            utterance.rate = 1.25;
-            utterance.pitch = 1.15;
-            selectedVoiceObj = baseVoicePool.find(
-              (v) =>
-                v.name.toLowerCase().includes("gb") ||
-                v.name.toLowerCase().includes("uk") ||
-                v.name.toLowerCase().includes("samantha") ||
-                v.name.toLowerCase().includes("rishi") ||
-                v.name.toLowerCase().includes("google")
-            );
-          } else if (selectedVoice === "Fenrir") {
-            utterance.rate = 0.95;
-            utterance.pitch = 0.85;
-            selectedVoiceObj = baseVoicePool.find(
-              (v) =>
-                v.name.toLowerCase().includes("male") ||
-                v.name.toLowerCase().includes("david") ||
-                v.name.toLowerCase().includes("google") ||
-                v.name.toLowerCase().includes("ravi")
-            );
-          }
+      // 2. Consistent English voice profiling with adaptive regional tone matching
+      if (!selectedVoiceObj) {
+        const isIndiaPreset = ["kn-IN", "hi-IN", "en-IN"].includes(selectedLanguage);
+        
+        // Segment voices into local Indian accented and global English sets
+        const enInVoices = voices.filter(v => v.lang.toLowerCase().replace('_', '-').startsWith("en-in"));
+        const baseVoicePool = (isIndiaPreset && enInVoices.length > 0) ? enInVoices : (voices.length > 0 ? voices : []);
 
-          // Absolute default fallback configuration
-          if (!selectedVoiceObj) {
-            utterance.rate = 1.0;
-            utterance.pitch = 1.0;
-            if (isIndiaPreset && enInVoices.length > 0) {
-              selectedVoiceObj = enInVoices[0];
-            } else {
-              selectedVoiceObj = voices.find(v => v.lang.toLowerCase().startsWith("en")) || voices[0];
-            }
-          }
+        if (selectedVoice === "Zephyr") {
+          utterance.rate = 1.15;
+          utterance.pitch = 1.25;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("female") ||
+              v.name.toLowerCase().includes("zira") ||
+              v.name.toLowerCase().includes("google") ||
+              v.name.toLowerCase().includes("samantha") ||
+              v.name.toLowerCase().includes("heera") ||
+              v.name.toLowerCase().includes("rhea") ||
+              v.name.toLowerCase().includes("veena")
+          );
+        } else if (selectedVoice === "Charon") {
+          utterance.rate = 0.85;
+          utterance.pitch = 0.70;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("male") ||
+              v.name.toLowerCase().includes("david") ||
+              v.name.toLowerCase().includes("hazel") ||
+              v.name.toLowerCase().includes("rishi") ||
+              v.name.toLowerCase().includes("ravi") ||
+              v.name.toLowerCase().includes("google")
+          );
+        } else if (selectedVoice === "Puck") {
+          utterance.rate = 1.25;
+          utterance.pitch = 1.15;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("gb") ||
+              v.name.toLowerCase().includes("uk") ||
+              v.name.toLowerCase().includes("samantha") ||
+              v.name.toLowerCase().includes("rishi") ||
+              v.name.toLowerCase().includes("google")
+          );
+        } else if (selectedVoice === "Fenrir") {
+          utterance.rate = 0.95;
+          utterance.pitch = 0.85;
+          selectedVoiceObj = baseVoicePool.find(
+            (v) =>
+              v.name.toLowerCase().includes("male") ||
+              v.name.toLowerCase().includes("david") ||
+              v.name.toLowerCase().includes("google") ||
+              v.name.toLowerCase().includes("ravi")
+          );
         }
 
-        if (selectedVoiceObj) {
-          utterance.voice = selectedVoiceObj;
-        }
-
-        // Custom browser handling fallback safety
-        if (!utterance.voice && voices.length > 0) {
-          const fallbackEn = voices.find((v) => v.lang.toLowerCase().includes("en"));
-          if (fallbackEn) {
-            utterance.voice = fallbackEn;
+        // Absolute default fallback configuration
+        if (!selectedVoiceObj) {
+          utterance.rate = 1.0;
+          utterance.pitch = 1.0;
+          if (isIndiaPreset && enInVoices.length > 0) {
+            selectedVoiceObj = enInVoices[0];
           } else {
-            utterance.voice = voices[0];
+            selectedVoiceObj = voices.find(v => v.lang.toLowerCase().startsWith("en")) || voices[0];
           }
         }
+      }
 
-        // Lock reference inside memory to protect from browser background GC
-        activeUtterancesRef.current.push(utterance);
+      if (selectedVoiceObj) {
+        utterance.voice = selectedVoiceObj;
+      }
 
-        utterance.onend = () => {
-          // Relieve reference from memory array
-          const idx = activeUtterancesRef.current.indexOf(utterance);
-          if (idx !== -1) {
-            activeUtterancesRef.current.splice(idx, 1);
-          }
-          currentChunkIndexRef.current += 1;
-          speakNextChunk();
-        };
+      // Custom browser handling fallback safety
+      if (!utterance.voice && voices.length > 0) {
+        const fallbackEn = voices.find((v) => v.lang.toLowerCase().includes("en"));
+        if (fallbackEn) {
+          utterance.voice = fallbackEn;
+        } else {
+          utterance.voice = voices[0];
+        }
+      }
 
-        utterance.onerror = (e) => {
-          console.error("Native synthesis error on chunk:", e);
-          setIsSpeaking(false);
-          activeUtterancesRef.current = [];
-        };
-
-        window.speechSynthesis.speak(utterance);
+      utterance.onend = () => {
+        setIsSpeaking(false);
       };
 
-      // Play the first chunk
-      speakNextChunk();
+      utterance.onerror = (e) => {
+        console.error("Native synthesis error:", e);
+        setIsSpeaking(false);
+      };
+
+      window.speechSynthesis.speak(utterance);
     } catch (err) {
-      console.error("Synthesizer failed to execute:", err);
+      console.error("Synthesizer failed:", err);
       setIsGeneratingVoice(false);
       setIsSpeaking(false);
     }
