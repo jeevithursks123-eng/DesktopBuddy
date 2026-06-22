@@ -8,8 +8,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Mic, MicOff, Play, Pause, RotateCcw, Volume2, VolumeX, Plus, Trash2, 
   Copy, Check, Sparkles, Clock, FileText, Keyboard, AlertTriangle, 
-  HelpCircle, CheckSquare, ChevronRight, X, ExternalLink, Search, Loader2, Globe,
-  Battery, BatteryCharging, BatteryWarning, MapPin, Share2, Smartphone, Tablet, Monitor, Wifi, WifiOff, Navigation
+  HelpCircle, CheckSquare, ChevronRight, X, ExternalLink, Search, Loader2, Globe
 } from "lucide-react";
 
 interface Note {
@@ -28,7 +27,7 @@ export default function App() {
   // Navigation or Tabs - None as per Single-View Constraint!
   // App states
   const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "Hello! I am Aura, your voice assistant. Pick a language or voice, or press the Spacebar to speak commands. I support English, Hindi (हिंदी), and Kannada (ಕನ್ನಡ)!" }
+    { role: "assistant", content: "Hello! I am Aura, your desktop voice assistant. Pick a language or voice, or press the Spacebar to speak relative commands. I now understand English, Hindi (हिंदी), and Kannada (ಕನ್ನಡ)!" }
   ]);
   const [inputText, setInputText] = useState("");
   const [selectedLanguage, setSelectedLanguage] = useState("en-US");
@@ -38,12 +37,6 @@ export default function App() {
   const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState("Kore");
   const [apiError, setApiError] = useState<string | null>(null);
-
-  // Device integration states
-  const [batteryState, setBatteryState] = useState<{ level: number; charging: boolean } | null>(null);
-  const [locationState, setLocationState] = useState<{ latitude: number; longitude: number; accuracy: number } | null>(null);
-  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
-  const [activeMobileTab, setActiveMobileTab] = useState<"assistant" | "focus" | "search" | "scratchpad">("assistant");
 
   // Search Engine Widget states
   const [searchEngine, setSearchEngine] = useState<"google" | "duckduckgo">("google");
@@ -80,75 +73,6 @@ export default function App() {
   const [timerLeft, setTimerLeft] = useState(25 * 60); // 25 mins in sec
   const [timerDuration, setTimerDuration] = useState(25 * 60);
 
-  // Haptic feedback API Integration
-  const triggerHaptic = (pattern: number | number[] = 25) => {
-    if (typeof window !== "undefined" && "vibrate" in navigator) {
-      try {
-        navigator.vibrate(pattern);
-      } catch (e) {
-        console.warn("Haptic vibrate ignored:", e);
-      }
-    }
-  };
-
-  // Screen Wake Lock API Integration (Prevents standby on mobile/tablet during active voice feedback sessions)
-  const wakeLockRef = useRef<any>(null);
-  const requestWakeLock = async () => {
-    if (typeof window !== "undefined" && "wakeLock" in navigator) {
-      try {
-        wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
-      } catch (err) {
-        console.warn("Device wake lock request denied:", err);
-      }
-    }
-  };
-
-  const releaseWakeLock = () => {
-    if (wakeLockRef.current) {
-      try {
-        wakeLockRef.current.release();
-        wakeLockRef.current = null;
-      } catch (err) {
-        console.warn("Wake lock release error:", err);
-      }
-    }
-  };
-
-  // Native Device Share Sheet integration
-  const handleDeviceShare = async (title: string, text: string) => {
-    triggerHaptic(20);
-    if (typeof window !== "undefined" && "share" in navigator) {
-      try {
-        await navigator.share({
-          title,
-          text,
-        });
-      } catch (err) {
-        console.log("Share operation closed:", err);
-      }
-    } else {
-      navigator.clipboard.writeText(text);
-      setCopiedResponse(true);
-      setTimeout(() => setCopiedResponse(false), 2000);
-    }
-  };
-
-  // Geolocation trigger
-  const requestDeviceLocation = () => {
-    if (typeof window !== "undefined" && "geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude, accuracy } = position.coords;
-          setLocationState({ latitude, longitude, accuracy });
-        },
-        (err) => {
-          console.warn("Location query denied or failed:", err);
-        },
-        { enableHighAccuracy: false, timeout: 6000, maximumAge: 600000 }
-      );
-    }
-  };
-
   // Setup clocks
   useEffect(() => {
     const updateTime = () => {
@@ -159,49 +83,6 @@ export default function App() {
     updateTime();
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
-  }, []);
-
-  // Setup Device Integrations: Battery status, network state, and geolocation triggers
-  useEffect(() => {
-    // Try to trigger geolocation coords on start
-    requestDeviceLocation();
-
-    // Battery levels
-    if (typeof window !== "undefined" && "getBattery" in navigator) {
-      (navigator as any).getBattery().then((battery: any) => {
-        const updateBattery = () => {
-          setBatteryState({
-            level: Math.round(battery.level * 100),
-            charging: battery.charging
-          });
-        };
-        updateBattery();
-        battery.addEventListener("levelchange", updateBattery);
-        battery.addEventListener("chargingchange", updateBattery);
-        return () => {
-          battery.removeEventListener("levelchange", updateBattery);
-          battery.removeEventListener("chargingchange", updateBattery);
-        };
-      }).catch((e: any) => console.warn("Battery API error:", e));
-    }
-
-    // Network connection indicators
-    const handleOnline = () => {
-      setIsOnline(true);
-      triggerHaptic([30, 80]);
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-      triggerHaptic([100, 100]);
-    };
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
   }, []);
 
   // Setup Speech Recognition
@@ -219,8 +100,6 @@ export default function App() {
 
     rec.onstart = () => {
       setIsListening(true);
-      triggerHaptic([30, 40]);
-      requestWakeLock();
       currentTranscriptRef.current = "";
     };
 
@@ -230,6 +109,7 @@ export default function App() {
         if (event.results[i].isFinal) {
           finalTranscript += event.results[i][0].transcript;
         } else {
+          // You could show interim results if wanted
           currentTranscriptRef.current = event.results[i][0].transcript;
         }
       }
@@ -240,7 +120,6 @@ export default function App() {
 
     rec.onend = () => {
       setIsListening(false);
-      releaseWakeLock();
       const textToSubmit = currentTranscriptRef.current.trim();
       if (textToSubmit) {
         handleSendMessage(textToSubmit);
@@ -250,8 +129,6 @@ export default function App() {
     rec.onerror = (event: any) => {
       console.error("Speech Recognition encounter:", event.error);
       setIsListening(false);
-      releaseWakeLock();
-      triggerHaptic([100, 50, 100]);
     };
 
     recognitionRef.current = rec;
@@ -465,8 +342,6 @@ export default function App() {
 
       setIsGeneratingVoice(false);
       setIsSpeaking(true);
-      triggerHaptic(25);
-      requestWakeLock();
 
       const voices = window.speechSynthesis.getVoices();
       currentChunkIndexRef.current = 0;
@@ -477,7 +352,6 @@ export default function App() {
         if (currentChunkIndexRef.current >= chunks.length) {
           setIsSpeaking(false);
           activeUtterancesRef.current = [];
-          releaseWakeLock();
           return;
         }
 
@@ -622,7 +496,6 @@ export default function App() {
           console.error("Native synthesis error on chunk:", e);
           setIsSpeaking(false);
           activeUtterancesRef.current = [];
-          releaseWakeLock();
         };
 
         window.speechSynthesis.speak(utterance);
@@ -906,101 +779,48 @@ export default function App() {
       {/* Symmetrical subtle linear gradient background overlay */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-950/20 via-zinc-950 to-zinc-950 pointer-events-none" />
 
-      {/* Primary Top Header Bar: Responsive layout for Desktop, Tablet, and Mobile */}
-      <header className="border-b border-zinc-850 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-40 px-4 sm:px-8 py-4 flex flex-col xl:flex-row justify-between items-center gap-4 transition-all" id="aura-header">
+      {/* Primary Top Header Bar: Symmetrical Layout */}
+      <header className="border-b border-zinc-850 bg-zinc-950/90 backdrop-blur-md sticky top-0 z-40 px-8 py-5 flex flex-col md:flex-row justify-between items-center gap-6 transition-all" id="aura-desktop-header">
         
-        {/* Nav Logo block with rotated geometry and responsive subtitle */}
-        <div className="flex items-center gap-3 w-full xl:w-auto justify-between xl:justify-start">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-indigo-600 rounded-sm rotate-45 flex items-center justify-center shadow-lg shadow-indigo-500/10">
-              <div className="w-2.5 h-2.5 bg-white rounded-full -rotate-45" />
-            </div>
-            <div>
-              <h1 className="text-base sm:text-lg font-bold tracking-tight uppercase text-zinc-100 flex items-center gap-2">
-                Aura <span className="text-zinc-500 font-normal tracking-wide normal-case underline decoration-indigo-500 underline-offset-4 pl-1">Assistant</span>
-              </h1>
-            </div>
+        {/* Dynamic Nav Logo block with rotated geometry */}
+        <div className="flex items-center gap-4">
+          <div className="w-8 h-8 bg-indigo-600 rounded-sm rotate-45 flex items-center justify-center shadow-lg shadow-indigo-500/10">
+            <div className="w-2.5 h-2.5 bg-white rounded-full -rotate-45" />
           </div>
-
-          {/* Quick Responsive Devicetype Icon Status indicator on header */}
-          <div className="flex items-center gap-2 bg-zinc-900/60 px-2.5 py-1 rounded-full border border-zinc-800 text-zinc-400">
-            <span className="hidden sm:inline text-[9px] font-mono uppercase tracking-widest">Active Device:</span>
-            <span className="xl:hidden">
-              <Smartphone className="w-3.5 h-3.5 text-indigo-400 sm:hidden" />
-              <Tablet className="w-3.5 h-3.5 text-indigo-400 hidden sm:inline xl:hidden" />
-            </span>
-            <span className="hidden xl:inline">
-              <Monitor className="w-3.5 h-3.5 text-indigo-400" />
-            </span>
+          <div>
+            <h1 className="text-lg font-bold tracking-tight uppercase text-zinc-100 flex items-center gap-2">
+              Aura <span className="text-zinc-500 font-normal tracking-wide normal-case underline decoration-indigo-500 underline-offset-4 pl-1">Desktop</span>
+            </h1>
           </div>
         </div>
 
-        {/* Header Symmetrical Statistics and State with flex-wrap and responsive columns */}
-        <div className="flex flex-wrap items-center justify-center xl:justify-end gap-3 sm:gap-6 w-full xl:w-auto text-neutral-100 border-t border-zinc-900 pt-3 xl:pt-0 xl:border-0">
+        {/* Header Symmetrical Statistics and State */}
+        <div className="flex flex-wrap items-center gap-8 text-neutral-100">
           
           {/* Symmetrical Spec: System Clocks */}
-          <div className="flex flex-col items-center sm:items-end bg-zinc-900/30 p-2 sm:p-0 rounded-lg sm:bg-transparent">
-            <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none mb-1">STATION CLOCKS</span>
-            <span className="text-xs sm:text-sm font-mono text-zinc-300 flex items-center gap-1.5">
+          <div className="flex flex-col items-end">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">STATION CLOCKS</span>
+            <span className="text-sm font-mono text-zinc-300 flex items-center gap-2">
               <span>{localTime}</span>
               <span className="text-zinc-700">|</span>
-              <span className="text-zinc-500 text-[11px]">{utcTime}</span>
+              <span className="text-zinc-500 text-xs">{utcTime}</span>
             </span>
           </div>
 
-          {/* New Device Metric Integration: Battery Status */}
-          <div className="flex flex-col items-center sm:items-end border-l border-zinc-900 pl-3 sm:pl-6">
-            <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Power Metric</span>
-            <div className="flex items-center gap-1.5">
-              {batteryState ? (
-                <>
-                  <span className="text-xs font-mono text-zinc-300">{batteryState.level}%</span>
-                  {batteryState.charging ? (
-                    <BatteryCharging className="w-4 h-4 text-emerald-400 animate-pulse" />
-                  ) : batteryState.level < 20 ? (
-                    <BatteryWarning className="w-4 h-4 text-amber-500 animate-bounce" />
-                  ) : (
-                    <Battery className="w-4 h-4 text-zinc-400" />
-                  )}
-                </>
-              ) : (
-                <span className="text-xs font-mono text-zinc-500">Unconnected</span>
-              )}
-            </div>
-          </div>
-
-          {/* New Device Metric Integration: Geolocation tracker */}
-          <div className="flex flex-col items-center sm:items-end border-l border-zinc-900 pl-3 sm:pl-6">
-            <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none mb-1">GPS Coordinates</span>
-            <button 
-              onClick={() => { triggerHaptic(15); requestDeviceLocation(); }}
-              className="flex items-center gap-1 hover:text-indigo-400 transition-colors focus:outline-none"
-              title="Click to recalculate GPS position"
-            >
-              {locationState ? (
-                <>
-                  <MapPin className="w-3.5 h-3.5 text-indigo-400" />
-                  <span className="text-[10px] font-mono text-zinc-300 truncate max-w-[100px]">
-                    {locationState.latitude.toFixed(3)}, {locationState.longitude.toFixed(3)}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <MapPin className="w-3.5 h-3.5 text-zinc-600 animate-pulse" />
-                  <span className="text-[10px] font-mono text-zinc-500">Locating...</span>
-                </>
-              )}
-            </button>
+          {/* Symmetrical Spec: Active Model */}
+          <div className="hidden sm:flex flex-col items-end border-l border-zinc-900 pl-8">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Active Model</span>
+            <span className="text-sm font-mono text-zinc-300">llama-3.3-70b-versatile</span>
           </div>
 
           {/* Symmetrical Spec: Input Language */}
-          <div className="flex flex-col items-center sm:items-end border-l border-zinc-900 pl-3 sm:pl-6" id="language-selection">
-            <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none mb-1">System Language</span>
-            <div className="flex items-center gap-1 mt-0.5">
+          <div className="flex flex-col items-end border-l border-zinc-900 pl-8" id="language-selection">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">System Language</span>
+            <div className="flex items-center gap-2 mt-0.5">
               <select 
                 value={selectedLanguage} 
-                onChange={(e) => { triggerHaptic(15); setSelectedLanguage(e.target.value); }}
-                className="bg-transparent text-[11px] text-indigo-400 font-semibold focus:outline-none cursor-pointer font-mono"
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                className="bg-transparent text-xs text-indigo-400 font-semibold focus:outline-none cursor-pointer font-mono"
               >
                 <option value="en-US" className="bg-zinc-900 text-zinc-200">English (US)</option>
                 <option value="en-IN" className="bg-zinc-900 text-zinc-200">English (India)</option>
@@ -1010,14 +830,14 @@ export default function App() {
             </div>
           </div>
 
-          {/* Symmetrical Spec: Voice Speaker */}
-          <div className="flex flex-col items-center sm:items-end border-l border-zinc-900 pl-3 sm:pl-6" id="voice-selection">
-            <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Speaker Voice</span>
-            <div className="flex items-center gap-1.5 mt-0.5">
+          {/* Symmetrical Spec: Voice Synthesis */}
+          <div className="flex flex-col items-end border-l border-zinc-900 pl-8" id="voice-selection">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">Speaker Voice</span>
+            <div className="flex items-center gap-2 mt-0.5">
               <select 
                 value={selectedVoice} 
-                onChange={(e) => { triggerHaptic(15); setSelectedVoice(e.target.value); }}
-                className="bg-transparent text-[11px] text-indigo-400 font-semibold focus:outline-none cursor-pointer font-mono"
+                onChange={(e) => setSelectedVoice(e.target.value)}
+                className="bg-transparent text-xs text-indigo-400 font-semibold focus:outline-none cursor-pointer font-mono"
               >
                 <option value="Kore" className="bg-zinc-900 text-zinc-200">Kore (Balanced)</option>
                 <option value="Zephyr" className="bg-zinc-900 text-zinc-200">Zephyr (Cheerfully)</option>
@@ -1027,7 +847,7 @@ export default function App() {
               </select>
               <button 
                 onClick={triggerVoiceTest}
-                className={`p-0.5 rounded hover:bg-zinc-900 transition-colors ${isSpeaking ? "text-red-400 animate-pulse" : "text-zinc-500 hover:text-white"}`}
+                className={`p-1 rounded hover:bg-zinc-900 transition-colors ${isSpeaking ? "text-red-400 animate-pulse" : "text-zinc-500 hover:text-white"}`}
                 title="Test Speaker Config"
               >
                 {isSpeaking ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
@@ -1035,26 +855,15 @@ export default function App() {
             </div>
           </div>
 
-          {/* Symmetrical Spec: Wireless connectivity status indicator */}
-          <div className="flex items-center gap-3 border-l border-zinc-900 pl-3 sm:pl-6">
-            <div className="flex flex-col items-center sm:items-end mr-0.5">
-              <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none mb-1">AURANET STATUS</span>
-              <span className={`text-xs font-mono font-bold ${isOnline ? "text-indigo-400" : "text-red-400"}`}>
-                {isOnline ? "ONLINE" : "OFFLINE"}
-              </span>
+          {/* Symmetrical Spec: System Latency indicator Node */}
+          <div className="flex items-center gap-3 border-l border-zinc-900 pl-8">
+            <div className="flex flex-col items-end mr-0.5">
+              <span className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none mb-1">AURANET STATUS</span>
+              <span className="text-xs font-mono text-indigo-400">142ms</span>
             </div>
-            <div className="relative flex h-3 w-3 justify-center items-center">
-              {isOnline ? (
-                <>
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]"></span>
-                </>
-              ) : (
-                <>
-                  <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.6)]"></span>
-                </>
-              )}
+            <div className="relative flex h-3 h-3 justify-center items-center">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]"></span>
             </div>
           </div>
 
@@ -1122,13 +931,13 @@ export default function App() {
               </AnimatePresence>
 
               {/* Symmetrical nested rings layout of theme */}
-              <div className="w-[280px] h-[280px] min-[360px]:w-[310px] min-[360px]:h-[310px] rounded-full border border-zinc-800/80 flex items-center justify-center relative">
+              <div className="w-[310px] h-[310px] rounded-full border border-zinc-800/80 flex items-center justify-center relative">
                 
                 {/* Secondary middle ring */}
-                <div className="w-[220px] h-[220px] min-[360px]:w-[250px] min-[360px]:h-[250px] rounded-full border border-zinc-700/60 flex items-center justify-center relative">
+                <div className="w-[250px] h-[250px] rounded-full border border-zinc-700/60 flex items-center justify-center relative">
                   
                   {/* Third deep indigo shaded ring */}
-                  <div className="w-[160px] h-[160px] min-[360px]:w-[190px] min-[360px]:h-[190px] rounded-full border border-indigo-950/80 flex items-center justify-center bg-zinc-950/90 shadow-2xl relative">
+                  <div className="w-[190px] h-[190px] rounded-full border border-indigo-950/80 flex items-center justify-center bg-zinc-950/90 shadow-2xl relative">
                     
                     {/* Interactive Core Mic Activation Circle */}
                     <motion.div
@@ -1154,7 +963,7 @@ export default function App() {
                           ? { repeat: Infinity, duration: 0.8, ease: "easeInOut" }
                           : { repeat: Infinity, duration: 4, ease: "easeInOut" }
                       }
-                      className={`w-28 h-28 min-[360px]:w-32 min-[360px]:h-32 rounded-full flex flex-col items-center justify-center cursor-pointer z-10 transition-colors duration-500 shadow-2xl relative ${
+                      className={`w-32 h-32 rounded-full flex flex-col items-center justify-center cursor-pointer z-10 transition-colors duration-500 shadow-2xl relative ${
                         isListening 
                           ? "bg-rose-950/30 border border-rose-500 shadow-rose-500/10"
                           : isThinking
@@ -1301,22 +1110,13 @@ export default function App() {
                       {msg.role === "user" ? "USER PROMPT" : msg.isCommand ? "⚡ DESKTOP COMMAND" : "AURA RESPONDENT"}
                     </span>
                     {msg.role === "assistant" && !msg.isCommand && (
-                      <div className="flex items-center gap-2">
-                        <button 
-                          onClick={() => { triggerHaptic(10); copyResponseText(msg.content); }}
-                          className="text-zinc-500 hover:text-zinc-300 transition-colors p-0.5 focus:outline-none"
-                          title="Copy Response Text"
-                        >
-                          {copiedResponse ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                        <button 
-                          onClick={() => { triggerHaptic(15); handleDeviceShare("Aura Response", msg.content); }}
-                          className="text-zinc-500 hover:text-zinc-300 transition-colors p-0.5 focus:outline-none"
-                          title="Share Response via native Sheet"
-                        >
-                          <Share2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                      <button 
+                        onClick={() => copyResponseText(msg.content)}
+                        className="text-zinc-500 hover:text-zinc-300 transition-colors p-0.5"
+                        title="Copy Response text"
+                      >
+                        {copiedResponse ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
                     )}
                   </div>
                   <p className="whitespace-pre-line leading-relaxed mt-1 text-xs text-zinc-300 font-normal">
@@ -1664,31 +1464,24 @@ export default function App() {
                       className="p-3 bg-zinc-950 border border-zinc-850 hover:border-zinc-800 rounded-xl flex items-start justify-between gap-3 group relative hover:bg-zinc-900/20 transition-all"
                     >
                       <div className="flex-1 min-w-0 pr-8">
-                        <span className="text-[10px] font-mono text-zinc-500">{note.timestamp}</span>
+                        <span className="text-[10px] font-mono text-zinc-505">{note.timestamp}</span>
                         <p className="text-xs text-zinc-300 font-normal mt-0.5 leading-relaxed break-words whitespace-pre-line">
                           {note.content}
                         </p>
                       </div>
- 
+
                       {/* Floating actions */}
-                      <div className="opacity-35 group-hover:opacity-100 flex items-center gap-1.5 transition-all absolute right-2.5 top-2.5 bg-zinc-950 group-hover:bg-zinc-900 group-hover:z-10 p-0.5 rounded border border-zinc-800">
+                      <div className="opacity-30 group-hover:opacity-100 flex items-center gap-1.5 transition-all absolute right-2.5 top-2.5 bg-zinc-950 group-hover:bg-zinc-900 p-0.5 rounded border border-zinc-800">
                         <button
-                          onClick={() => { triggerHaptic(10); copyNoteText(note.id, note.content); }}
-                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors focus:outline-none"
+                          onClick={() => copyNoteText(note.id, note.content)}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors"
                           title="Copy Sticky Content"
                         >
                           {copiedNoteId === note.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                         </button>
                         <button
-                          onClick={() => { triggerHaptic(15); handleDeviceShare("Aura Note", note.content); }}
-                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors focus:outline-none"
-                          title="Share Note"
-                        >
-                          <Share2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => { triggerHaptic(20); deleteScratchnote(note.id); }}
-                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-rose-450 transition-colors focus:outline-none"
+                          onClick={() => deleteScratchnote(note.id)}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-rose-450 transition-colors"
                           title="Delete note"
                         >
                           <Trash2 className="w-3.5 h-3.5 hover:text-rose-400" />
