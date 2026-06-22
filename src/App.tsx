@@ -594,21 +594,34 @@ export default function App() {
         })
       });
 
-      const data = await response.json();
+      let data: any;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        const textPayload = await response.text();
+        const cleanSnippet = textPayload.substring(0, 160).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+        throw new Error(cleanSnippet || `Server returned HTML or raw text format error with status ${response.status}`);
+      }
+
       setIsThinking(false);
 
-      if (data.error) {
+      if (data && data.error) {
         setApiError(data.error);
         return;
       }
 
-      if (data.reply) {
+      if (data && data.reply) {
         setMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
         await executeVoiceSynthesis(data.reply);
       }
     } catch (err: any) {
       console.error("Chat request failed:", err);
-      setApiError(err.message || "An unexpected error occurred while communicating with Groq.");
+      let errMsg = err.message || "";
+      if (errMsg.includes("Unexpected token") || errMsg.includes("is not valid JSON")) {
+        errMsg = "The server returned an HTML error response. The connection might have timed out or the backend is starting up.";
+      }
+      setApiError(errMsg || "An unexpected error occurred while communicating with the server.");
       setIsThinking(false);
     }
   };
@@ -631,24 +644,39 @@ export default function App() {
         body: JSON.stringify({ query: trimmed, engine: searchEngine })
       });
 
-      const data = await res.json();
+      let data: any;
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const textPayload = await res.text();
+        const cleanSnippet = textPayload.substring(0, 160).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+        throw new Error(cleanSnippet || `Server returned HTML/Text format error with status ${res.status}`);
+      }
+
       setIsSearching(false);
 
-      if (data.error) {
+      if (data && data.error) {
         setSearchError(data.error);
         return;
       }
 
-      setSearchAnswer(data.answer);
-      setSearchResults(data.results || []);
+      if (data) {
+        setSearchAnswer(data.answer);
+        setSearchResults(data.results || []);
 
-      // Voice the summary search response aloud
-      if (data.answer) {
-        await executeVoiceSynthesis(data.answer);
+        // Voice the summary search response aloud
+        if (data.answer) {
+          await executeVoiceSynthesis(data.answer);
+        }
       }
     } catch (err: any) {
       console.error("Web Search failed:", err);
-      setSearchError(err.message || "Failed to execute search. Check server connectivity.");
+      let errMsg = err.message || "";
+      if (errMsg.includes("Unexpected token") || errMsg.includes("is not valid JSON")) {
+        errMsg = "The search server returned an invalid or HTML error response. Your request may have timed out.";
+      }
+      setSearchError(errMsg || "Failed to execute search. Check server connectivity.");
       setIsSearching(false);
     }
   };

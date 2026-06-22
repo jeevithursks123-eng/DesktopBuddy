@@ -70,12 +70,25 @@ app.post("/api/chat", async (req, res) => {
 
     if (!response.ok) {
       const errText = await response.text();
+      let cleanErrorMessage = errText;
+      if (errText.includes("<!DOCTYPE") || errText.includes("<html") || errText.includes("The page")) {
+        cleanErrorMessage = "The Groq API returned an HTML error page. This usually signifies that the public fallback API key has been rate-limited or disabled. Please configure your own GROQ_API_KEY inside the Secrets tab.";
+      }
       return res.status(response.status).json({ 
-        error: `Groq API returned an error: ${errText}` 
+        error: `Groq API returned an error: ${cleanErrorMessage}` 
       });
     }
 
-    const data = await response.json();
+    let data: any;
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      data = await response.json();
+    } else {
+      const textVal = await response.text();
+      let cleanErr = textVal.substring(0, 160).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+      throw new Error(`The Groq API returned non-JSON content: ${cleanErr || "Raw Text/HTML page response"}`);
+    }
+
     const reply = data.choices?.[0]?.message?.content;
 
     if (!reply) {
@@ -85,7 +98,11 @@ app.post("/api/chat", async (req, res) => {
     res.json({ reply });
   } catch (err: any) {
     console.error("Error in /api/chat:", err);
-    res.status(500).json({ error: err.message || "An error occurred during chat processing." });
+    let errorMessage = err.message || "An error occurred during chat processing.";
+    if (!process.env.GROQ_API_KEY) {
+      errorMessage += " Please verify that you have attached your personal GROQ_API_KEY within your Secrets tab.";
+    }
+    res.status(500).json({ error: errorMessage });
   }
 });
 
@@ -465,7 +482,11 @@ app.post("/api/tts", async (req, res) => {
     res.json({ base64Audio: wavBase64, mimeType: 'audio/wav' });
   } catch (err: any) {
     console.error("Error in /api/tts:", err);
-    res.status(500).json({ error: err.message || "An error occurred during voice synthesis." });
+    let errorMessage = err.message || "An error occurred during voice synthesis.";
+    if (!process.env.GEMINI_API_KEY) {
+      errorMessage += " Please verify that you have attached your personal GEMINI_API_KEY within your Secrets tab.";
+    }
+    res.status(500).json({ error: errorMessage });
   }
 });
 
