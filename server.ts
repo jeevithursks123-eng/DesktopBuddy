@@ -54,53 +54,79 @@ app.post("/api/chat", async (req, res) => {
       { role: "user", content: message }
     ];
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${groqKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages,
-        temperature: 0.7,
-        max_tokens: 350
-      })
-    });
+    let reply = "";
+    let usingFallbackGemini = false;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      let cleanErrorMessage = errText;
-      if (errText.includes("<!DOCTYPE") || errText.includes("<html") || errText.includes("The page")) {
-        cleanErrorMessage = "The Groq API returned an HTML error page. This usually signifies that the public fallback API key has been rate-limited or disabled. Please configure your own GROQ_API_KEY inside the Secrets tab.";
-      }
-      return res.status(response.status).json({ 
-        error: `Groq API returned an error: ${cleanErrorMessage}` 
+    try {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${groqKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages,
+          temperature: 0.7,
+          max_tokens: 350
+        })
       });
-    }
 
-    let data: any;
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
-      data = await response.json();
-    } else {
-      const textVal = await response.text();
-      let cleanErr = textVal.substring(0, 160).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-      throw new Error(`The Groq API returned non-JSON content: ${cleanErr || "Raw Text/HTML page response"}`);
-    }
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Groq API responded with code ${response.status}: ${errText}`);
+      }
 
-    const reply = data.choices?.[0]?.message?.content;
+      let data: any;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        const textVal = await response.text();
+        throw new Error(`Non-JSON payload returned: ${textVal}`);
+      }
+
+      reply = data.choices?.[0]?.message?.content || "";
+    } catch (groqErr: any) {
+      console.warn("Groq API request failed, initiating high-reliability fallback to Gemini 3.5 Flash:", groqErr.message || groqErr);
+      usingFallbackGemini = true;
+
+      const geminiKey = process.env.GEMINI_API_KEY || "AIzaSyDjfKpP-6oBTsC7S7Te03CfB_aF1pzEodI";
+      const ai = new GoogleGenAI({
+        apiKey: geminiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      // Map messages history to Gemini SDK parts format
+      const geminiContents = [
+        ...(history || []).map((h: any) => ({
+          role: h.role === "assistant" ? "model" : "user",
+          parts: [{ text: h.content || h.message || "" }]
+        })),
+        { role: "user", parts: [{ text: message }] }
+      ];
+
+      const geminiRes = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: geminiContents,
+        config: {
+          systemInstruction: systemPrompt
+        }
+      });
+
+      reply = geminiRes.text || "";
+    }
 
     if (!reply) {
-      return res.status(500).json({ error: "No response received from Groq." });
+      return res.status(500).json({ error: "No response details could be retrieved from neither Groq nor Gemini fallback." });
     }
 
-    res.json({ reply });
+    res.json({ reply, fallbackUsed: usingFallbackGemini });
   } catch (err: any) {
     console.error("Error in /api/chat:", err);
     let errorMessage = err.message || "An error occurred during chat processing.";
     if (!process.env.GROQ_API_KEY) {
-      errorMessage += " Please verify that you have attached your personal GROQ_API_KEY within your Secrets tab.";
+      errorMessage += " (Optionally, configure your custom GROQ_API_KEY in Secrets if you want native Groq performance.)";
     }
     res.status(500).json({ error: errorMessage });
   }
